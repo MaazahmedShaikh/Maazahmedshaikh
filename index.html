@@ -3,118 +3,164 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Contact Popup</title>
+    <title>Contact Me</title>
     <style>
-        /* 1. Button Styling - FIXED */
-        #myBtn {
-            /* Ensures button is above other elements */
-            position: relative; 
-            z-index: 9999; 
+        /* --- CSS STYLES --- */
+
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            /* Just for demonstration purposes to show the button clearly */
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #f4f4f9;
+        }
+
+        /* 1. The Contact Button */
+        #contactBtn {
+            /* High z-index ensures it sits on top of everything else */
+            position: relative;
+            z-index: 1000; 
             
-            padding: 15px 30px;
-            background-color: #007BFF;
+            padding: 15px 40px;
+            font-size: 18px;
+            background-color: #007BFF; /* Blue */
             color: white;
             border: none;
-            border-radius: 5px;
-            cursor: pointer; /* Force mouse pointer icon */
-            font-size: 16px;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: background-color 0.3s ease;
         }
 
-        #myBtn:hover {
-            background-color: #0056b3;
+        #contactBtn:hover {
+            background-color: #0056b3; /* Darker Blue on hover */
         }
 
-        /* 2. Modal Styling */
-        .modal {
-            display: none; 
+        /* 2. The Modal Overlay (Background) */
+        .modal-overlay {
+            display: none; /* Hidden by default */
             position: fixed; 
-            z-index: 10000; /* Must be higher than button */
+            z-index: 2000; /* Higher than everything */
             left: 0;
             top: 0;
             width: 100%; 
             height: 100%; 
-            background-color: rgba(0,0,0,0.5); 
+            background-color: rgba(0,0,0,0.6); /* Black w/ opacity */
+            backdrop-filter: blur(4px); /* Blur effect */
         }
 
-        .modal-content {
-            background-color: #fefefe;
-            margin: 15% auto;
+        /* 3. The Modal Box */
+        .modal-box {
+            background-color: #fff;
+            margin: 15% auto; /* 15% from top, centered horizontally */
             padding: 30px;
-            border: 1px solid #888;
+            border-radius: 12px;
             width: 90%;
-            max-width: 400px;
-            border-radius: 10px;
+            max-width: 450px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
             text-align: center;
-            font-family: Arial, sans-serif;
             position: relative;
+            animation: fadeIn 0.3s;
         }
 
-        .close {
+        /* 4. Close Button (X) */
+        .close-btn {
             position: absolute;
             top: 10px;
-            right: 15px;
+            right: 20px;
             color: #aaa;
             font-size: 28px;
             font-weight: bold;
             cursor: pointer;
+            transition: color 0.2s;
         }
-        
-        /* Links inside modal */
-        .contact-row a {
-            text-decoration: none;
+
+        .close-btn:hover {
             color: #333;
+        }
+
+        /* 5. Content Styling */
+        h2 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        .contact-item {
+            margin: 20px 0;
+            font-size: 18px;
+            color: #555;
+        }
+
+        .contact-item a {
+            text-decoration: none;
+            color: #007BFF;
             font-weight: bold;
-            display: inline-block; /* Makes the link area larger/easier to click */
-            padding: 5px;
+            display: inline-block;
+            margin-left: 5px;
+        }
+
+        .contact-item a:hover {
+            text-decoration: underline;
+        }
+
+        /* Animation for smooth opening */
+        @keyframes fadeIn {
+            from {opacity: 0; transform: translateY(-20px);}
+            to {opacity: 1; transform: translateY(0);}
         }
     </style>
 </head>
 <body>
 
-    <button id="myBtn">Contact Me</button>
+    <button id="contactBtn">Contact Me</button>
 
-    <div id="myModal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
+    <div id="contactModal" class="modal-overlay">
+        <div class="modal-box">
+            <span class="close-btn">&times;</span>
             <h2>Get in Touch</h2>
-            <hr>
-            <div style="margin-top: 20px;">
-                <p>
-                    📧 <a href="mailto:maazahmedshaikh.mas@gmail.com">maazahmedshaikh.mas@gmail.com</a>
-                </p>
-                <p>
-                    📞 <a href="tel:+919727866007">+91 9727866007</a>
-                </p>
+            <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+            
+            <div class="contact-item">
+                <span>📧</span>
+                <a href="mailto:maazahmedshaikh.mas@gmail.com">maazahmedshaikh.mas@gmail.com</a>
+            </div>
+
+            <div class="contact-item">
+                <span>📞</span>
+                <a href="tel:+919727866007">+91 9727866007</a>
             </div>
         </div>
     </div>
 
     <script>
-        // Wait for the HTML to load completely before running script
-        document.addEventListener("DOMContentLoaded", function() {
+        // Use DOMContentLoaded to ensure elements exist before we try to attach events
+        document.addEventListener('DOMContentLoaded', function() {
             
-            var modal = document.getElementById("myModal");
-            var btn = document.getElementById("myBtn");
-            var span = document.getElementsByClassName("close")[0];
+            // 1. Get Elements
+            var modal = document.getElementById("contactModal");
+            var btn = document.getElementById("contactBtn");
+            var span = document.getElementsByClassName("close-btn")[0];
 
-            // Debugging check
-            if (!btn) {
-                console.error("Button not found! Check your HTML ID.");
-            }
-
-            btn.onclick = function() {
+            // 2. Open Modal
+            btn.addEventListener('click', function() {
                 modal.style.display = "block";
-            }
+            });
 
-            span.onclick = function() {
+            // 3. Close Modal on 'X' click
+            span.addEventListener('click', function() {
                 modal.style.display = "none";
-            }
+            });
 
-            window.onclick = function(event) {
+            // 4. Close Modal on clicking outside the box
+            window.addEventListener('click', function(event) {
                 if (event.target == modal) {
                     modal.style.display = "none";
                 }
-            }
+            });
         });
     </script>
 
