@@ -6,42 +6,53 @@
   <title>Maazahmed Shaikh | Business Analyst</title>
 
   <style>
-    /* =========================================
-       1. GLOBAL STYLES
-       ========================================= */
+    /* 1. RESET & BASICS */
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; background: #f5f7fa; }
     
-    /* Header Styles */
+    /* 2. HEADER */
     .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 80px 20px; text-align: center; }
     .header h1 { font-size: 48px; margin-bottom: 10px; }
     .header .subtitle { font-size: 22px; margin-bottom: 10px; opacity: 0.9; }
     .header .tagline { font-size: 16px; max-width: 700px; margin: 0 auto 30px; opacity: 0.85; }
     
-    /* Buttons */
+    /* 3. BUTTONS */
     .btn-group { display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; }
     
+    /* Standard Link Button */
     .btn { 
         padding: 12px 30px; 
         border-radius: 5px; 
         text-decoration: none; 
         font-weight: 600; 
         transition: transform 0.3s; 
-        cursor: pointer; /* Ensures hand icon appears */
         display: inline-block;
         font-size: 16px;
     }
+    .btn-primary { background: white; color: #667eea; }
+
+    /* The Contact Button (Special Styling for <button> tag) */
+    .btn-contact {
+        padding: 12px 30px;
+        border-radius: 5px;
+        font-weight: 600;
+        font-size: 16px;
+        background: transparent;
+        color: white;
+        border: 2px solid white;
+        cursor: pointer; /* FORCE HAND CURSOR */
+        font-family: inherit; /* Inherit font from body */
+    }
+    .btn-contact:hover {
+        background-color: rgba(255,255,255,0.1);
+        transform: translateY(-2px);
+    }
     
-    .btn-primary { background: white; color: #667eea; border: 2px solid white; }
-    .btn-secondary { background: transparent; color: white; border: 2px solid white; }
-    .btn:hover { transform: translateY(-2px); }
-    
-    /* Layout */
+    /* 4. CONTENT SECTIONS */
     .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
     .section { background: white; margin: 30px 0; padding: 40px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
     .section h2 { color: #667eea; font-size: 28px; margin-bottom: 20px; border-left: 4px solid #764ba2; padding-left: 15px; }
     
-    /* Grids & Cards */
     .skills-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; }
     .skill-item { background: #f5f7fa; padding: 15px; border-radius: 8px; border: 2px solid #e1e8ed; text-align: center; font-weight: 500; }
     
@@ -55,19 +66,17 @@
     
     footer { text-align: center; padding: 30px; margin-top: 40px; color: #666; }
 
-    /* =========================================
-       2. MODAL POPUP STYLES (Fixed Z-Index)
-       ========================================= */
+    /* 5. MODAL POPUP STYLES */
     .modal-overlay {
-        display: none; /* Hidden by default */
+        display: none; /* MUST BE HIDDEN BY DEFAULT */
         position: fixed; 
-        z-index: 99999; /* Highest possible layer */
+        z-index: 99999; /* Highest priority */
         left: 0;
         top: 0;
         width: 100%; 
         height: 100%; 
-        background-color: rgba(0,0,0,0.6); 
-        backdrop-filter: blur(4px);
+        background-color: rgba(0,0,0,0.7); 
+        backdrop-filter: blur(3px);
     }
 
     .modal-box {
@@ -79,7 +88,7 @@
         max-width: 400px;
         box-shadow: 0 10px 25px rgba(0,0,0,0.5);
         position: relative;
-        animation: slideDown 0.3s ease-out;
+        animation: slideDown 0.3s;
     }
 
     .modal-header {
@@ -116,7 +125,6 @@
     }
 
     .contact-row:hover { background: #eef2f7; border-color: #667eea; }
-
     .contact-row span { font-size: 24px; margin-right: 15px; }
 
     .contact-row a {
@@ -139,36 +147,27 @@
 <div class="header">
   <h1>Maazahmed Shaikh</h1>
   <p class="subtitle">Business Analyst | Enterprise & Client Solutions</p>
-  <p class="tagline">
-    Delivering client-focused technology solutions with strong requirement analysis,
-    stakeholder coordination, and functional documentation expertise
-  </p>
+  <p class="tagline">Delivering client-focused technology solutions</p>
   
   <div class="btn-group">
     <a href="https://github.com/MaazahmedShaikh/Maazahmedshaikh/raw/main/Resume.pdf" class="btn btn-primary" target="_blank">Download Resume</a>
     
-    <a class="btn btn-secondary" onclick="openModal()">Contact Me</a>
+    <button type="button" class="btn-contact" onclick="document.getElementById('contactModal').style.display='block'">
+        Contact Me
+    </button>
   </div>
 </div>
 
 <div class="container">
-
   <div class="section">
     <h2>Professional Summary</h2>
-    <p>
-      Business Analyst with 3+ years of experience working on multiple client engagements
-      across enterprise and application-based projects. Strong in requirement elicitation,
-      BRD/FRD documentation, UAT coordination, and stakeholder management.
-    </p>
+    <p>Business Analyst with 3+ years of experience working on multiple client engagements...</p>
   </div>
 
   <div class="section">
     <h2>Core Competencies</h2>
     <div class="skills-grid">
       <div class="skill-item">Requirement Gathering</div>
-      <div class="skill-item">BRD / FRD</div>
-      <div class="skill-item">User Stories</div>
-      <div class="skill-item">UAT Management</div>
       <div class="skill-item">SQL Analysis</div>
       <div class="skill-item">Agile / Scrum</div>
     </div>
@@ -178,14 +177,14 @@
     <h2>Client Project Case Studies</h2>
     <div class="cases-grid">
       <div class="case-card">
-        <h3>Master Data Management Platform</h3>
+        <h3>Master Data Management</h3>
         <p>Defined data governance, validation rules, and approval workflows.</p>
         <div class="case-impact">✓ 45% better data accuracy</div>
         <div class="tech-tags"><span class="tag">MDM</span><span class="tag">SQL</span></div>
       </div>
       <div class="case-card">
-        <h3>Field Force Automation – Pharma</h3>
-        <p>Captured mobile CRM requirements for doctor visits and reporting.</p>
+        <h3>Field Force Automation</h3>
+        <p>Captured mobile CRM requirements for doctor visits.</p>
         <div class="case-impact">✓ 85% adoption</div>
         <div class="tech-tags"><span class="tag">Mobile</span><span class="tag">CRM</span></div>
       </div>
@@ -201,7 +200,7 @@
 <div id="contactModal" class="modal-overlay">
     <div class="modal-box">
         <div class="modal-header">
-            <span class="close-btn" onclick="closeModal()">&times;</span>
+            <span class="close-btn" onclick="document.getElementById('contactModal').style.display='none'">&times;</span>
             <h2 style="color:white; border:none; padding:0; margin:0;">Get In Touch</h2>
         </div>
         <div class="modal-body">
@@ -218,27 +217,7 @@
 </div>
 
 <script>
-    // 1. Define the variables globally
-    var modal = document.getElementById("contactModal");
-
-    // 2. Direct Function to Open
-    function openModal() {
-        if(modal) {
-            modal.style.display = "block";
-        } else {
-            console.error("Modal not found!");
-            alert("Error: Modal not loaded");
-        }
-    }
-
-    // 3. Direct Function to Close
-    function closeModal() {
-        if(modal) {
-            modal.style.display = "none";
-        }
-    }
-
-    // 4. Close if clicking outside the box
+    var modal = document.getElementById('contactModal');
     window.onclick = function(event) {
         if (event.target == modal) {
             modal.style.display = "none";
