@@ -5,50 +5,50 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Contact Popup</title>
     <style>
-        /* 1. Button Styling */
-        .contact-btn {
+        /* 1. Button Styling - FIXED */
+        #myBtn {
+            /* Ensures button is above other elements */
+            position: relative; 
+            z-index: 9999; 
+            
             padding: 15px 30px;
             background-color: #007BFF;
             color: white;
             border: none;
             border-radius: 5px;
-            cursor: pointer;
+            cursor: pointer; /* Force mouse pointer icon */
             font-size: 16px;
         }
 
-        .contact-btn:hover {
+        #myBtn:hover {
             background-color: #0056b3;
         }
 
-        /* 2. The Modal (background) */
+        /* 2. Modal Styling */
         .modal {
-            display: none; /* Hidden by default */
+            display: none; 
             position: fixed; 
-            z-index: 1000; 
+            z-index: 10000; /* Must be higher than button */
             left: 0;
             top: 0;
             width: 100%; 
             height: 100%; 
-            background-color: rgba(0,0,0,0.5); /* Black w/ opacity */
-            backdrop-filter: blur(5px); /* Optional: blurs background */
+            background-color: rgba(0,0,0,0.5); 
         }
 
-        /* 3. Modal Content Box */
         .modal-content {
             background-color: #fefefe;
-            margin: 15% auto; /* 15% from the top and centered */
+            margin: 15% auto;
             padding: 30px;
             border: 1px solid #888;
             width: 90%;
             max-width: 400px;
             border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
             text-align: center;
             font-family: Arial, sans-serif;
             position: relative;
         }
 
-        /* 4. The Close Button */
         .close {
             position: absolute;
             top: 10px;
@@ -58,80 +58,64 @@
             font-weight: bold;
             cursor: pointer;
         }
-
-        .close:hover,
-        .close:focus {
-            color: black;
-            text-decoration: none;
-        }
-
-        /* 5. Contact Info Styling */
-        .contact-info {
-            margin-top: 20px;
-        }
         
-        .contact-row {
-            margin: 15px 0;
-            font-size: 18px;
-        }
-
+        /* Links inside modal */
         .contact-row a {
             text-decoration: none;
             color: #333;
             font-weight: bold;
-        }
-
-        .contact-row a:hover {
-            color: #007BFF;
+            display: inline-block; /* Makes the link area larger/easier to click */
+            padding: 5px;
         }
     </style>
 </head>
 <body>
 
-    <button id="myBtn" class="contact-btn">Contact Me</button>
+    <button id="myBtn">Contact Me</button>
 
     <div id="myModal" class="modal">
         <div class="modal-content">
             <span class="close">&times;</span>
             <h2>Get in Touch</h2>
             <hr>
-            <div class="contact-info">
-                <div class="contact-row">
+            <div style="margin-top: 20px;">
+                <p>
                     📧 <a href="mailto:maazahmedshaikh.mas@gmail.com">maazahmedshaikh.mas@gmail.com</a>
-                </div>
-                <div class="contact-row">
+                </p>
+                <p>
                     📞 <a href="tel:+919727866007">+91 9727866007</a>
-                </div>
+                </p>
             </div>
         </div>
     </div>
 
     <script>
-        // Get the modal
-        var modal = document.getElementById("myModal");
+        // Wait for the HTML to load completely before running script
+        document.addEventListener("DOMContentLoaded", function() {
+            
+            var modal = document.getElementById("myModal");
+            var btn = document.getElementById("myBtn");
+            var span = document.getElementsByClassName("close")[0];
 
-        // Get the button that opens the modal
-        var btn = document.getElementById("myBtn");
+            // Debugging check
+            if (!btn) {
+                console.error("Button not found! Check your HTML ID.");
+            }
 
-        // Get the <span> element that closes the modal
-        var span = document.getElementsByClassName("close")[0];
+            btn.onclick = function() {
+                modal.style.display = "block";
+            }
 
-        // When the user clicks the button, open the modal 
-        btn.onclick = function() {
-            modal.style.display = "block";
-        }
-
-        // When the user clicks on <span> (x), close the modal
-        span.onclick = function() {
-            modal.style.display = "none";
-        }
-
-        // When the user clicks anywhere outside of the modal, close it
-        window.onclick = function(event) {
-            if (event.target == modal) {
+            span.onclick = function() {
                 modal.style.display = "none";
             }
-        }
+
+            window.onclick = function(event) {
+                if (event.target == modal) {
+                    modal.style.display = "none";
+                }
+            }
+        });
     </script>
 
 </body>
