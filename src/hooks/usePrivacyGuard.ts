@@ -10,31 +10,24 @@ interface PrivacyGuardOptions {
 /**
  * Global privacy hook:
  * 1. Prevents screenshots and obscures app switcher preview
- * 2. Locks app back to calculator on AppState inactive / background
+ * 2. Locks app back to calculator on AppState background
  * 3. Locks app back to calculator on face-down (z < -0.88) or sharp shake (magnitude > 2.6)
  */
 export function usePrivacyGuard({ onPanicLock }: PrivacyGuardOptions) {
-  // Prevent screenshots
-  ScreenCapture.usePreventScreenCapture();
-
-  // App Switcher preview protection for iOS
+  // Prevent screenshots safely on Android (on iOS, screen capture prevention overlays a black window)
   useEffect(() => {
-    if (Platform.OS === 'ios') {
-      try {
-        const sc: any = ScreenCapture;
-        if (typeof sc.enableAppSwitcherProtectionAsync === 'function') {
-          sc.enableAppSwitcherProtectionAsync(1.0);
-        }
-      } catch (err) {
-        // Fallback gracefully on unsupporting platforms
+    try {
+      if (Platform.OS === 'android') {
+        ScreenCapture.preventScreenCaptureAsync().catch(() => {});
       }
-    }
+    } catch {}
   }, []);
 
-  // AppState listener: background / inactive immediately resets to decoy calculator
+  // AppState listener: background resets to decoy calculator
+  // (Do NOT trigger on 'inactive' as iOS always transitions through 'inactive' during app launch!)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      if (nextAppState === 'background' || nextAppState === 'inactive') {
+      if (nextAppState === 'background') {
         onPanicLock();
       }
     });
@@ -46,24 +39,31 @@ export function usePrivacyGuard({ onPanicLock }: PrivacyGuardOptions) {
 
   // Accelerometer listener: face-down flip or sharp shake
   useEffect(() => {
-    Accelerometer.setUpdateInterval(150);
+    let subscription: any = null;
+    try {
+      Accelerometer.setUpdateInterval(250);
 
-    const subscription = Accelerometer.addListener(({ x, y, z }) => {
-      // 1. Flipping face-down (z < -0.88)
-      if (z < -0.88) {
-        onPanicLock();
-        return;
-      }
+      subscription = Accelerometer.addListener(({ x, y, z }) => {
+        // 1. Flipping face-down (z < -0.88)
+        if (z < -0.88) {
+          onPanicLock();
+          return;
+        }
 
-      // 2. Sharp shake (total acceleration vector magnitude > 2.6 Gs)
-      const magnitude = Math.sqrt(x * x + y * y + z * z);
-      if (magnitude > 2.6) {
-        onPanicLock();
-      }
-    });
+        // 2. Sharp shake (total acceleration vector magnitude > 2.6 Gs)
+        const magnitude = Math.sqrt(x * x + y * y + z * z);
+        if (magnitude > 2.6) {
+          onPanicLock();
+        }
+      });
+    } catch (e) {
+      // Gracefully continue if sensors are restricted
+    }
 
     return () => {
-      subscription.remove();
+      try {
+        subscription?.remove?.();
+      } catch {}
     };
   }, [onPanicLock]);
 }

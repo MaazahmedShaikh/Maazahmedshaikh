@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { SafeAreaView, Text, TouchableOpacity } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -10,6 +11,36 @@ import { DecoyNotesScreen } from './src/screens/DecoyNotesScreen';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { VaultListScreen } from './src/screens/VaultListScreen';
 import { ChatScreen } from './src/screens/ChatScreen';
+
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: any, info: any) {
+    console.error('App ErrorBoundary:', error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#0B141A', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <Text style={{ color: '#E9EDEF', fontSize: 18, fontWeight: 'bold', marginBottom: 12 }}>App Notice</Text>
+          <Text style={{ color: '#8696A0', textAlign: 'center', marginBottom: 20 }}>{String(this.state.error?.message || this.state.error)}</Text>
+          <TouchableOpacity
+            style={{ backgroundColor: '#00A884', paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 }}
+            onPress={() => this.setState({ hasError: false, error: null })}
+          >
+            <Text style={{ color: '#0B141A', fontWeight: 'bold' }}>Restart App</Text>
+          </TouchableOpacity>
+        </SafeAreaView>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<RootScreen>('calculator');
@@ -100,49 +131,51 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <StatusBar style="light" />
+      <ErrorBoundary>
+        <StatusBar style="light" />
 
-      {currentScreen === 'calculator' && (
-        <CalculatorScreen
-          onUnlockVault={handleUnlockVault}
-          onOpenDecoyNotes={handleOpenDecoyNotes}
-          isLockedOut={isLockedOut}
-        />
-      )}
+        {currentScreen === 'calculator' && (
+          <CalculatorScreen
+            onUnlockVault={handleUnlockVault}
+            onOpenDecoyNotes={handleOpenDecoyNotes}
+            isLockedOut={isLockedOut}
+          />
+        )}
 
-      {currentScreen === 'decoy_notes' && (
-        <DecoyNotesScreen onLock={handlePanicLock} />
-      )}
+        {currentScreen === 'decoy_notes' && (
+          <DecoyNotesScreen onLock={handlePanicLock} />
+        )}
 
-      {currentScreen === 'auth' && (
-        <AuthScreen
-          onAuthSuccess={handleAuthSuccess}
-          onLock={handlePanicLock}
-        />
-      )}
+        {currentScreen === 'auth' && (
+          <AuthScreen
+            onAuthSuccess={handleAuthSuccess}
+            onLock={handlePanicLock}
+          />
+        )}
 
-      {currentScreen === 'vault_list' && (
-        <VaultListScreen
-          onSelectThread={handleSelectThread}
-          onLock={handlePanicLock}
-          onSignOut={handleSignOut}
-          unlockedThreadIds={unlockedThreadIds}
-          onUnlockThreadId={handleUnlockThreadId}
-          onRecordFailedAttempt={handleRecordFailedAttempt}
-        />
-      )}
+        {currentScreen === 'vault_list' && (
+          <VaultListScreen
+            onSelectThread={handleSelectThread}
+            onLock={handlePanicLock}
+            onSignOut={handleSignOut}
+            unlockedThreadIds={unlockedThreadIds}
+            onUnlockThreadId={handleUnlockThreadId}
+            onRecordFailedAttempt={handleRecordFailedAttempt}
+          />
+        )}
 
-      {currentScreen === 'chat' && activeThread && currentUser && (
-        <ChatScreen
-          thread={activeThread}
-          currentUserId={currentUser.id}
-          onBack={() => {
-            setActiveThread(null);
-            setCurrentScreen('vault_list');
-          }}
-          onLock={handlePanicLock}
-        />
-      )}
+        {currentScreen === 'chat' && activeThread && currentUser && (
+          <ChatScreen
+            thread={activeThread}
+            currentUserId={currentUser.id}
+            onBack={() => {
+              setActiveThread(null);
+              setCurrentScreen('vault_list');
+            }}
+            onLock={handlePanicLock}
+          />
+        )}
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

@@ -10,6 +10,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.anonymous.smartcalc",
       "infoPlist": {
+        "NSMotionUsageDescription": "Motion sensors are used to calculate device orientation.",
         "UIBackgroundModes": []
       }
     },
