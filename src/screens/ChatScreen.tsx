@@ -200,7 +200,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     setSending(false);
 
-    if (!error && data) {
+    if (error) {
+      // Show error if insert failed
+      console.error('Send error:', error);
+    } else if (data) {
       const newMsg: DecryptedMessage = {
         ...data,
         content: text,

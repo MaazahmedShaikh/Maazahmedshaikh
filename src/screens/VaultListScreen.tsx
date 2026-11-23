@@ -110,7 +110,12 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       .select()
       .single();
 
-    if (!error && data) {
+    if (error) {
+      Alert.alert('Database Error', error.message);
+      return;
+    }
+
+    if (data) {
       setNewChatTitle('');
       setNewChatModalVisible(false);
       onSelectThread(data as Thread);
