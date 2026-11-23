@@ -8,7 +8,7 @@
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://npdyfmqjhijnvnhwzvcp.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "YOUR_SUPABASE_ANON_KEY",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wZHlmbXFqaGlqbnZuaHd6dmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU0MTgzMTgsImV4cCI6MjExMDk5NDMxOH0.Zd4Nsit7vVLu5si3rWp_EqdUSXZv05fkgwEMRZFnO_k",
         "EXPO_PUBLIC_CIPHER_SECRET": "monsoon-copper-lantern-8841-vault"
       }
     },
@@ -22,7 +22,7 @@
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://npdyfmqjhijnvnhwzvcp.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "YOUR_SUPABASE_ANON_KEY",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wZHlmbXFqaGlqbnZuaHd6dmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU0MTgzMTgsImV4cCI6MjExMDk5NDMxOH0.Zd4Nsit7vVLu5si3rWp_EqdUSXZv05fkgwEMRZFnO_k",
         "EXPO_PUBLIC_CIPHER_SECRET": "monsoon-copper-lantern-8841-vault"
       }
     },
@@ -32,7 +32,7 @@
       },
       "env": {
         "EXPO_PUBLIC_SUPABASE_URL": "https://npdyfmqjhijnvnhwzvcp.supabase.co",
-        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "YOUR_SUPABASE_ANON_KEY",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5wZHlmbXFqaGlqbnZuaHd6dmNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTU0MTgzMTgsImV4cCI6MjExMDk5NDMxOH0.Zd4Nsit7vVLu5si3rWp_EqdUSXZv05fkgwEMRZFnO_k",
         "EXPO_PUBLIC_CIPHER_SECRET": "monsoon-copper-lantern-8841-vault"
       }
     }
