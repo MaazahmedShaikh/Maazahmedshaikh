@@ -1,0 +1,229 @@
+Here is the complete, end-to-end guide to building, locking down, deploying, and hiding your WhatsApp-styled, calculator-disguised, burn-after-reading mobile app on both Android and iOS using Google Antigravity IDE and Supabase—with zero personal servers to manage.
+
+Phase 1: Set Up Supabase & Lock Down Access (5 Minutes)
+Supabase gives you a free cloud database, real-time WebSocket updates, authentication, and pg_cron scheduling without renting a server.
+
+Create a Project:
+
+Sign in at supabase.com and click New Project.
+
+Pick a project name, database password, and a region near your users (e.g., Mumbai ap-south-1).
+
+Copy Your API Keys:
+
+Go to Project Settings > API.
+
+Copy the Project URL and the anon public key—you will put these in your .env file.
+
+Disable Public Sign-Ups & Create Only 2 Users:
+
+Go to Authentication > Providers > Email and toggle OFF "Allow new users to sign up". Nobody outside your dashboard will ever be able to register.
+
+Go to Authentication > Users and click Add user twice (once for you, once for the second person).
+
+Copy both User UUIDs from the users table.
+
+Enable pg_cron & Run Your Schema:
+
+Go to Database > Extensions, search for pg_cron, and enable it if it isn't already active.
+
+Open SQL Editor, paste the schema (replacing 'REPLACE_WITH_USER_1_UUID' and 'REPLACE_WITH_USER_2_UUID' with your two actual UUIDs), and click Run.
+
+Phase 2: Generate the App in Google Antigravity IDE
+Prepare the Workspace:
+
+
+Create a .env file in the root directory:
+
+Code snippet
+EXPO_PUBLIC_SUPABASE_URL=your_supabase_project_url
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+EXPO_PUBLIC_CIPHER_SECRET=your_shared_secret_passphrase_9921
+Run the Master Prompt:
+
+Open Antigravity's Agent panel and paste the complete specification below:
+
+Plaintext
+Build a complete, production-ready, cross-platform iOS and Android privacy messaging app using Expo (SDK 58+, TypeScript) and Supabase (`@supabase/supabase-js`) disguised on the outside as a sleek, fully functional scientific calculator named "SmartCalc", and styled on the inside as a pixel-accurate WhatsApp Dark Mode messaging interface.
+
+The app must support:
+1. Offline queuing in Supabase so messages wait until the other person comes online and opens the chat.
+2. Immediate "burn-after-reading" deletion from Supabase once the recipient reads a message (plus optional countdown timers: `10s`, `1m`, `1h`, `24h`).
+3. A `pg_cron` SQL auto-purge job in `/supabase/schema.sql` that automatically deletes expired or stale rows every minute even when both devices are offline.
+4. Client-side cipher obfuscation/encryption using `EXPO_PUBLIC_CIPHER_SECRET` before inserting into Supabase, and zero message caching to `AsyncStorage` or local disk.
+
+### 1. TECH STACK & PACKAGES
+Initialize and configure the project with:
+- Expo (SDK 58+, TypeScript)
+- `@supabase/supabase-js` and `@react-native-async-storage/async-storage` (for Supabase Auth session persistence ONLY—never store chat messages or thread titles on disk)
+- `expo-screen-capture` (use `usePreventScreenCapture()` globally AND `ScreenCapture.enableAppSwitcherProtectionAsync(1.0)` on iOS so screenshots are blocked and app-switcher previews are obscured)
+- `expo-crypto` (SHA-256 hashing for individual chat 4-digit PINs and deterministic key stream generation from `EXPO_PUBLIC_CIPHER_SECRET`)
+- `expo-sensors` (`Accelerometer` for face-down and sharp-shake auto-lock)
+- `expo-haptics` (tactile feedback on calculator buttons, PIN pads, and send actions)
+- `@expo/vector-icons` (`Ionicons` and `MaterialCommunityIcons` for WhatsApp icons: double checkmarks, timer, lock, search, back arrow, three-dot menu)
+- `react-native-safe-area-context`
+
+### 2. PROJECT FOLDER STRUCTURE
+Generate the following modular architecture:
+- `/plugins/withSecretDialer.js` — Custom Expo Config Plugin for Android that adds a `BroadcastReceiver` listening for `android.provider.Telephony.SECRET_CODE` (`android:scheme="android_secret_code"`, `android:host="7391"`) to launch `MainActivity` when `*#*#7391#*#*` is dialed in the native Phone app, plus an optional flag (`HIDE_LAUNCHER_ICON=true`) to strip `android.intent.category.LAUNCHER` from `AndroidManifest.xml` so the standalone APK has no app-drawer icon.
+- `/src/lib/supabase.ts` — Supabase client configured with `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` (`detectSessionInUrl: false`, AsyncStorage auth storage).
+- `/src/lib/cryptoCodec.ts` — Helper functions using `expo-crypto` (`digestStringAsync` with SHA-256) to hash PINs and encode/decode message payloads with `EXPO_PUBLIC_CIPHER_SECRET` + a per-message random salt/nonce before sending to Supabase and after fetching.
+- `/src/theme/whatsappTheme.ts` — Exact WhatsApp Dark Mode visual design tokens.
+- `/src/types/database.ts` — Strict TypeScript interfaces for `Thread` and `Message`.
+- `/src/hooks/usePrivacyGuard.ts` — Global privacy hook handling:
+  1. `usePreventScreenCapture()` and `ScreenCapture.enableAppSwitcherProtectionAsync(1.0)`.
+  2. React Native `AppState` listener (`background` or `inactive` immediately clears unlocked thread PINs and decrypted messages from React memory and resets navigation back to `CalculatorScreen`).
+  3. `Accelerometer` listener from `expo-sensors`: flipping face-down (`z < -0.88`) or a sharp shake (`magnitude > 2.6`) triggers immediate panic lock back to `CalculatorScreen`.
+- `/src/screens/CalculatorScreen.tsx` — Default decoy calculator screen.
+- `/src/screens/DecoyNotesScreen.tsx` — Secondary decoy offline notes screen (unlocked via `0000=`).
+- `/src/screens/AuthScreen.tsx` — Minimal dark-mode login screen (no sign-up option).
+- `/src/screens/VaultListScreen.tsx` — WhatsApp Dark Mode "Chats" home screen with pill search bar (`9999` hidden-chat reveal), long-press thread actions, and floating green New Chat FAB.
+- `/src/screens/ChatScreen.tsx` — WhatsApp Dark Mode conversation screen with dark doodle pattern wallpaper, directional outgoing/incoming speech bubbles, burn-after-reading + countdown timer logic, read receipts, and floating pill composer.
+- `/src/components/PinModal.tsx` — WhatsApp-styled 4-digit numeric keypad modal for setting, changing, or verifying individual chat PINs.
+- `/supabase/schema.sql` — Complete SQL schema, Realtime replication setup, strict 2-user Row-Level Security (RLS) policies, and `pg_cron` auto-purge job.
+
+### 3. WHATSAPP DARK MODE DESIGN SYSTEM (`/src/theme/whatsappTheme.ts`)
+Use these exact WhatsApp Dark Mode tokens across all unlocked screens:
+- `bgPrimary`: `#0B141A`
+- `bgHeader`: `#1F2C34`
+- `bgInputPill`: `#2A3942`
+- `bgSearchFocus`: `#202C33`
+- `bubbleOutgoing`: `#005C4B`
+- `bubbleIncoming`: `#202C33`
+- `accentGreen`: `#00A884`
+- `tickBlue`: `#53BDEB`
+- `tickGray`: `#8696A0`
+- `textPrimary`: `#E9EDEF`
+- `textSecondary`: `#8696A0`
+- `divider`: `#222E35`
+- `danger`: `#F15C6D`
+
+### 4. DETAILED SCREEN & PRIVACY SPECIFICATIONS
+
+#### Layer 1: Total App Disguise & Intrusion Lockout (`CalculatorScreen.tsx`)
+- Render a realistic dark-mode calculator (`0-9`, `.`, `+`, `-`, `×`, `÷`, `%`, `+/-`, `AC`, `=`) with accurate floating-point arithmetic.
+- Rolling keystroke buffer of last 8 inputs:
+  - `7391=` (when not locked out): clear display and open `AuthScreen` (if unauthenticated) or `VaultListScreen` (if authenticated).
+  - `0000=`: clear display and open `DecoyNotesScreen` (harmless offline grocery/errand notes with a top-right "Lock" button).
+- **Anti-Intrusion Lockout:** After 3 consecutive failed PIN/unlock attempts in memory, lock out `7391=` for 1 hour so the app behaves strictly as a normal calculator.
+
+#### Layer 2: Strict 2-Person Login (`AuthScreen.tsx`)
+- Styled in WhatsApp Dark Mode (`#0B141A` / `#00A884`). Email + password login only (no Sign Up or Forgot Password links).
+
+#### Layer 3: WhatsApp Chat List & Hidden Chats (`VaultListScreen.tsx`)
+- Subscribe to Supabase `threads` via Realtime (`INSERT`, `UPDATE`, `DELETE`) and store threads strictly in React state memory (never in `AsyncStorage`).
+- **Top Header (`#0B141A`):** `"Chats"` title (`#E9EDEF`, 22px bold), Lock icon (`lock-closed-outline`) to immediately return to `CalculatorScreen`, and three-dot menu (`ellipsis-vertical`) with `"New chat"`, `"Sign out"`, and `"Panic Wipe All Data"` (`#F15C6D` confirmation that deletes all rows in `messages` and `threads`).
+- **WhatsApp Pill Search Bar (`#202C33`):** Placeholder `"Ask Meta AI or Search"`. By default show only `is_hidden === false`. Typing exact `9999` reveals all `is_hidden === true` threads under a `"Hidden Chats"` header; clearing search hides them again.
+- **Rows & Long-Press Menu (`#1F2C34`):** 50x50 circular avatar with initials + `#00A884` timer badge, title + lock icon, last message preview + `#53BDEB` double ticks, timestamp, and unread pill. Long-press offers:
+  1. **Hide / Unhide Chat** (`is_hidden` toggle).
+  2. **Set / Change / Remove 4-Digit Chat PIN** (SHA-256 hash stored in `threads.pin_hash`).
+  3. **Burn Mode & Timer** (`burn_on_read` toggle + `disappear_seconds` of `10s`, `1m`, `1h`, `24h`).
+  4. **Delete Chat**.
+- **FAB:** Bottom-right `#00A884` button (`56x56`, `borderRadius: 16`) to create a new thread.
+
+#### Layer 4: Per-Chat 4-Digit PIN Lock (`PinModal.tsx`)
+- Intercepts tapping any thread where `pin_hash !== null`. Verifies SHA-256 hash of entered 4 digits against `thread.pin_hash`. Unlocked thread IDs stay strictly in React state memory and re-lock on app lock/background.
+
+#### Layer 5: Offline Queue + Burn-After-Reading + Timers (`ChatScreen.tsx`)
+- WhatsApp Dark Mode chat view (`#1F2C34` header, `#0B141A` background with subtle `0.04` opacity doodle overlay, `#005C4B` outgoing bubbles, `#202C33` incoming bubbles, `#2A3942` floating pill input bar, `#00A884` circular send button).
+- **Offline Queue Behavior:** When User A sends a message while User B is offline or in another screen, the encrypted row stays in `messages` in Supabase until User B opens this `ChatScreen` (or receives it while `ChatScreen` is active).
+- **Burn-After-Reading + Countdown Behavior:**
+  - Each thread supports `burn_on_read` (boolean, default `true`) and `disappear_seconds` (`10`, `60`, `3600`, `86400`).
+  - When User B (`sender_id !== currentUser.id`) opens/views an incoming message in `ChatScreen` and `burn_on_read` is enabled: mark it read, show it briefly (or start a short burn grace timer like `8s` so User B can actually read it before it burns), and then immediately execute `supabase.from('messages').delete().eq('id', msg.id)` so it is deleted from Supabase and disappears from both screens.
+  - Also run a 1-second local timer to remove expired messages (`new Date(msg.expires_at) <= new Date()`) from UI state and a 5-second database cleanup (`DELETE FROM messages WHERE expires_at <= now()`).
+  - Show a live countdown badge (`⏱ 08s` or `🔥 Burns after read`) and double checkmarks (`checkmark-done`, `#53BDEB`) on bubbles.
+
+### 5. DATABASE SCHEMA & `pg_cron` AUTO-PURGE (`/supabase/schema.sql`)
+Generate `/supabase/schema.sql` containing:
+```sql
+create extension if not exists pg_cron;
+
+create table if not exists threads (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  is_hidden boolean default false,
+  pin_hash text,
+  disappear_seconds int default 60,
+  burn_on_read boolean default true,
+  created_at timestamptz default now()
+);
+
+create table if not exists messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid references threads(id) on delete cascade not null,
+  sender_id uuid not null,
+  content text not null,
+  read_at timestamptz,
+  expires_at timestamptz not null,
+  created_at timestamptz default now()
+);
+
+alter publication supabase_realtime add table threads, messages;
+
+alter table threads enable row level security;
+alter table messages enable row level security;
+
+create policy "Strict 2-user threads access" on threads for all
+  using (auth.uid() in ('REPLACE_WITH_USER_1_UUID', 'REPLACE_WITH_USER_2_UUID'))
+  with check (auth.uid() in ('REPLACE_WITH_USER_1_UUID', 'REPLACE_WITH_USER_2_UUID'));
+
+create policy "Strict 2-user messages access" on messages for all
+  using (auth.uid() in ('REPLACE_WITH_USER_1_UUID', 'REPLACE_WITH_USER_2_UUID'))
+  with check (auth.uid() in ('REPLACE_WITH_USER_1_UUID', 'REPLACE_WITH_USER_2_UUID'));
+
+-- Server-side safety net: purge expired messages or unread messages older than 7 days every minute
+select cron.schedule(
+  'purge-expired-stealth-messages',
+  '* * * * *',
+  $$ delete from public.messages where expires_at <= now() or created_at < now() - interval '7 days'; $$
+);
+6. APP CONFIGURATION (app.json)
+Set "name": "SmartCalc", "slug": "smart-calc", "userInterfaceStyle": "dark".
+
+Register ./plugins/withSecretDialer in "plugins".
+
+Exclude push notification plugins and location/contacts permissions.
+
+7. EXECUTION & VERIFICATION
+Install required Expo packages with npx expo install.
+
+Run npx tsc --noEmit to verify zero TypeScript errors.
+
+Start the Expo dev server and confirm clean bundling.
+
+
+---
+
+## Phase 3: Test & Build Standalone Installers (EAS Build)
+
+1. **Quick Live Test via Expo Go:**
+   * Run `npx expo start` in Antigravity's terminal and scan the QR code with **Expo Go** on Android or iPhone.
+   * Test normal calculator math, enter `7391=`, sign in with one of your two Supabase accounts, create a chat, set a PIN, hide the chat, and type `9999` in the search bar to bring it back.
+2. **Compile Standalone Installable Builds:**
+   * Install EAS CLI and configure your project:
+     ```bash
+     npm install -g eas-cli
+     eas login
+     eas build:configure
+     ```
+   * **Android (`.apk`):** Run `eas build -p android --profile preview` to get a standalone `.apk` link you can install directly on Android.
+   * **iOS (`.ipa`):** Run `eas build -p ios --profile preview` (requires an Apple Developer account for Ad-Hoc / TestFlight distribution onto an iPhone).
+
+---
+
+## Phase 4: Make It Invisible on Both Phones
+
+| Platform | How to Hide Completely |
+| :--- | :--- |
+| **Android** | Move the app into **Private Space** (Android 15+) or **Samsung Secure Folder** with a separate PIN, and enable **"Hide private space when locked"**. It disappears from your app drawer, recent apps, search, and notifications until you unlock the hidden space. You can also launch via `*#*#7391#*#*` in the phone dialer if configured. |
+| **iOS** | Long-press the app icon on your Home Screen > **Require Face ID** > **Hide and Require Face ID**. It moves into the locked **Hidden** folder at the bottom of your App Library and hides notifications. |
+
+---
+
+## Phase 5: Daily OpSec Habits That Matter Most
+
+* **Flip face-down or switch apps** whenever someone approaches—`usePrivacyGuard` wipes unlocked PINs and decrypted state from RAM immediately.
+* **Turn off lock-screen notification previews** across your phone so no alert ever hints at activity.
+* **Clean up your Play Store / App Store / Expo account history** after installing on both devices.
+
+<FollowUp label="Want me to walk you through the exact EAS Build profile setup for APK and iOS

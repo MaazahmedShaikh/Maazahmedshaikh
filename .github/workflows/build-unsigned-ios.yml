@@ -1,0 +1,64 @@
+name: Build Unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master, main, messenger-app ]
+
+jobs:
+  build-unsigned-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Expo prebuild for iOS
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Setup CocoaPods
+        run: |
+          cd ios
+          pod install
+
+      - name: Build Archive (Unsigned iPhoneOS ARM64)
+        run: |
+          cd ios
+          WORKSPACE=$(ls -d *.xcworkspace | head -n 1)
+          SCHEME=$(basename "$WORKSPACE" .xcworkspace)
+          
+          xcodebuild archive \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "$PWD/build/$SCHEME.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY=""
+
+      - name: Package .xcarchive into .ipa
+        run: |
+          cd ios
+          SCHEME=$(basename "$(ls -d *.xcworkspace | head -n 1)" .xcworkspace)
+          mkdir -p build/Payload
+          cp -r "build/$SCHEME.xcarchive/Products/Applications/$SCHEME.app" build/Payload/
+          cd build
+          zip -r "../SmartCalc-unsigned.ipa" Payload
+          cd ../..
+
+      - name: Upload Unsigned IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartCalc-unsigned-ipa
+          path: ios/SmartCalc-unsigned.ipa
