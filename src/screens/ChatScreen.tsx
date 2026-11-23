@@ -218,12 +218,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
-  const initials = thread.title
+  const safeTitle = (thread && typeof thread.title === 'string' && thread.title.trim()) ? thread.title : 'Chat';
+  const initials = safeTitle
     .split(' ')
+    .filter(Boolean)
     .map((w) => w[0])
     .join('')
     .toUpperCase()
-    .slice(0, 2);
+    .slice(0, 2) || 'C';
 
   return (
     <SafeAreaView style={styles.container}>

@@ -402,12 +402,21 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
         onRefresh={fetchThreads}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => {
-          const initials = item.title
+          const safeTitle = (item && typeof item.title === 'string' && item.title.trim()) ? item.title : 'Chat';
+          const initials = safeTitle
             .split(' ')
+            .filter(Boolean)
             .map((w) => w[0])
             .join('')
             .toUpperCase()
-            .slice(0, 2);
+            .slice(0, 2) || 'C';
+
+          const safeTime = item.created_at
+            ? new Date(item.created_at).toLocaleTimeString([], {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            : '';
 
           return (
             <TouchableOpacity
@@ -431,7 +440,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
               <View style={styles.threadMiddle}>
                 <View style={styles.titleRow}>
                   <Text style={styles.threadTitle} numberOfLines={1}>
-                    {item.title}
+                    {safeTitle}
                   </Text>
                   {item.pin_hash ? (
                     <Ionicons
@@ -465,12 +474,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
 
               {/* Time */}
               <View style={styles.threadRight}>
-                <Text style={styles.timeText}>
-                  {new Date(item.created_at).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </Text>
+                <Text style={styles.timeText}>{safeTime}</Text>
               </View>
             </TouchableOpacity>
           );

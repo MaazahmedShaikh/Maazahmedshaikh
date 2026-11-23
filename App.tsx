@@ -64,8 +64,10 @@ export default function App() {
     setUnlockedThreadIds(new Set());
   }, []);
 
-  // Hook privacy guard: screenshots blocked, app-switcher obscured, auto-lock on blur/shake/face-down
-  usePrivacyGuard({ onPanicLock: handlePanicLock });
+  // Hook privacy guard: screenshots blocked, auto-lock on blur/shake/face-down
+  // Only activate accelerometer motion sensors when inside secure screens (avoids calculator vibration triggers)
+  const isSecureScreen = currentScreen !== 'calculator';
+  usePrivacyGuard({ onPanicLock: handlePanicLock, isActiveScreenSecure: isSecureScreen });
 
   // Check Supabase Auth state on mount
   useEffect(() => {
