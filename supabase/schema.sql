@@ -24,8 +24,13 @@ create table if not exists public.messages (
   created_at timestamptz default now()
 );
 
--- Enable Realtime replication
-alter publication supabase_realtime add table public.threads, public.messages;
+-- Enable Realtime replication safely (ignore if already added)
+do $$
+begin
+  alter publication supabase_realtime add table public.threads, public.messages;
+exception
+  when duplicate_object then null;
+end $$;
 
 -- Enable Row Level Security
 alter table public.threads enable row level security;
@@ -37,7 +42,7 @@ drop policy if exists "Strict 2-user messages access" on public.messages;
 drop policy if exists "Allow logged in users on threads" on public.threads;
 drop policy if exists "Allow logged in users on messages" on public.messages;
 
--- Allow authenticated users (your 2 private accounts) full access
+-- Allow authenticated users (your private accounts) full access
 create policy "Allow logged in users on threads" on public.threads
   for all to authenticated
   using (true)
@@ -49,8 +54,13 @@ create policy "Allow logged in users on messages" on public.messages
   with check (true);
 
 -- Server-side safety net: purge expired messages or unread messages older than 7 days every minute
-select cron.schedule(
-  'purge-expired-stealth-messages',
-  '* * * * *',
-  $$ delete from public.messages where expires_at <= now() or created_at < now() - interval '7 days'; $$
-);
+do $$
+begin
+  perform cron.schedule(
+    'purge-expired-stealth-messages',
+    '* * * * *',
+    $$ delete from public.messages where expires_at <= now() or created_at < now() - interval '7 days'; $$
+  );
+exception
+  when others then null;
+end $$;
