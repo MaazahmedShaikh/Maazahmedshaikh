@@ -5,8 +5,11 @@ import {
   FlatList,
   Image,
   Keyboard,
+  KeyboardAvoidingView,
+  LayoutChangeEvent,
   Modal,
   PanResponder,
+  Platform,
   ScrollView,
   StyleSheet,
   Switch,
@@ -15,8 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -137,7 +139,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const [timerModalVisible, setTimerModalVisible] = useState(false);
+  const [androidKbPad, setAndroidKbPad] = useState(0);
 
+  const insets = useSafeAreaInsets();
+  const baseHeightRef = useRef(0);
+  const latestLayoutHeightRef = useRef(0);
+  const activeKbHeightRef = useRef(0);
   const flatListRef = useRef<FlatList>(null);
   const channelRef = useRef<any>(null);
   const typingTimeoutRef = useRef<any>(null);
@@ -213,15 +220,32 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     };
   }, []);
 
-  // Scroll to bottom when keyboard opens
+  // Self-calibrating keyboard listener (handles Android edge-to-edge & scrolls to bottom)
   useEffect(() => {
-    const sub = Keyboard.addListener('keyboardDidShow', () => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      if (Platform.OS === 'android') {
+        const kbH = e.endCoordinates?.height || 0;
+        activeKbHeightRef.current = kbH;
+        const osResizedBy = Math.max(0, baseHeightRef.current - latestLayoutHeightRef.current);
+        setAndroidKbPad(Math.max(0, kbH - osResizedBy - insets.bottom));
+      }
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 80);
     });
-    return () => sub.remove();
-  }, []);
+
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      if (Platform.OS === 'android') {
+        activeKbHeightRef.current = 0;
+        setAndroidKbPad(0);
+      }
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [insets.bottom]);
 
   // Fetch messages, subscribe to Realtime (WAL + Broadcast + Presence), and keep 2.5s silent sync fallback
   useEffect(() => {
@@ -668,7 +692,21 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     .slice(0, 2) || 'C';
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView
+      style={styles.container}
+      edges={['top', 'bottom']}
+      onLayout={(e: LayoutChangeEvent) => {
+        const h = e.nativeEvent.layout.height;
+        latestLayoutHeightRef.current = h;
+        if (Platform.OS !== 'android') return;
+        if (activeKbHeightRef.current === 0) {
+          baseHeightRef.current = h;
+        } else {
+          const osResizedBy = Math.max(0, baseHeightRef.current - h);
+          setAndroidKbPad(Math.max(0, activeKbHeightRef.current - osResizedBy - insets.bottom));
+        }
+      }}
+    >
       {/* Top Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onBack}>
@@ -713,10 +751,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
       </View>
 
-      {/* Body + Composer wrapped in KeyboardAvoidingView so textbox always sits on top of keyboard on Android & iOS */}
+      {/* Body + Composer: iOS uses native KeyboardAvoidingView, Android uses calibrated IME padding */}
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior="padding"
+        style={{ flex: 1, paddingBottom: Platform.OS === 'android' ? androidKbPad : 0 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
         {/* Messages Canvas */}

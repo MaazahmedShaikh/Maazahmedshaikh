@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { supabase } from './src/lib/supabase';
 import {
@@ -273,8 +272,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <KeyboardProvider>
-        <ErrorBoundary>
+      <ErrorBoundary>
           <View style={{ flex: 1 }} onTouchStartCapture={resetInactivityTimer}>
             <StatusBar style="light" />
 
@@ -345,7 +343,6 @@ export default function App() {
         )}
           </View>
         </ErrorBoundary>
-      </KeyboardProvider>
     </SafeAreaProvider>
   );
 }
