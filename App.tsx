@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { SafeAreaView, Text, TouchableOpacity } from 'react-native';
+import { Text, TouchableOpacity } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { supabase } from './src/lib/supabase';
 import {
@@ -190,7 +191,8 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <ErrorBoundary>
+      <KeyboardProvider>
+        <ErrorBoundary>
         <StatusBar style="light" />
 
         {currentScreen === 'calculator' && (
@@ -256,7 +258,8 @@ export default function App() {
             onLock={handlePanicLock}
           />
         )}
-      </ErrorBoundary>
+        </ErrorBoundary>
+      </KeyboardProvider>
     </SafeAreaProvider>
   );
 }

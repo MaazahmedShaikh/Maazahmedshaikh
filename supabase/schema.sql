@@ -24,6 +24,10 @@ create table if not exists public.messages (
   created_at timestamptz default now()
 );
 
+-- Ensure full row payloads in Realtime WAL events
+alter table public.threads replica identity full;
+alter table public.messages replica identity full;
+
 -- Enable Realtime replication safely (ignore if already added)
 do $$
 begin

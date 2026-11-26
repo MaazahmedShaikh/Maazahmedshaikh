@@ -3,10 +3,8 @@ import {
   Alert,
   FlatList,
   Image,
-  KeyboardAvoidingView,
+  Keyboard,
   Modal,
-  Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +12,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
@@ -111,10 +111,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     async (messageId: string) => {
       if (burningIdsRef.current.has(messageId)) return;
       startBurnCountdown(messageId, 8, true);
+      const readAt = new Date().toISOString();
       await supabase
         .from('messages')
-        .update({ read_at: new Date().toISOString() })
+        .update({ read_at: readAt })
         .eq('id', messageId);
+
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'read_msg',
+        payload: { id: messageId, read_at: readAt },
+      });
     },
     [startBurnCountdown]
   );
@@ -131,11 +138,42 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     };
   }, []);
 
-  // Fetch initial messages for thread and subscribe to Realtime + Ephemeral Presence
+  // Scroll to bottom when keyboard opens
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 80);
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Fetch messages, subscribe to Realtime (WAL + Broadcast + Presence), and keep 2.5s silent sync fallback
   useEffect(() => {
     let mounted = true;
 
-    (async () => {
+    const applyIncomingRow = async (rawMsg: Message) => {
+      if (new Date(rawMsg.expires_at) <= new Date()) return;
+      const plainContent = await decryptMessage(rawMsg.content);
+      const decryptedMsg: DecryptedMessage = {
+        ...rawMsg,
+        content: plainContent,
+      };
+
+      if (!mounted) return;
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === decryptedMsg.id)) return prev;
+        return [...prev, decryptedMsg].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+      });
+
+      if (rawMsg.sender_id !== currentUserId && thread.burn_on_read) {
+        handleIncomingBurn(rawMsg.id);
+      }
+    };
+
+    const syncFromServer = async () => {
       const { data, error } = await supabase
         .from('messages')
         .select('*')
@@ -145,24 +183,46 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       if (!mounted || error || !data) return;
 
       const now = new Date();
-      const validMessages = data.filter((m: Message) => new Date(m.expires_at) > now);
+      const validRows = (data as Message[]).filter((m) => new Date(m.expires_at) > now);
+      const serverIds = new Set(validRows.map((m) => m.id));
 
-      const decrypted = await Promise.all(
-        validMessages.map(async (m: Message) => {
+      const decryptedRows = await Promise.all(
+        validRows.map(async (m) => {
           const content = await decryptMessage(m.content);
-          return {
-            ...m,
-            content,
-          } as DecryptedMessage;
+          return { ...m, content } as DecryptedMessage;
         })
       );
 
       if (!mounted) return;
-      setMessages(decrypted);
 
-      // Trigger burn for unread incoming messages, or sync countdown for read outgoing messages
+      setMessages((prev) => {
+        const prevMap = new Map(prev.map((m) => [m.id, m]));
+        const next: DecryptedMessage[] = decryptedRows.map((row) => {
+          const existing = prevMap.get(row.id);
+          return existing
+            ? {
+                ...row,
+                isBurning: existing.isBurning,
+                remainingSeconds: existing.remainingSeconds,
+              }
+            : row;
+        });
+        // Preserve any just-sent local message not yet pruned, drop deleted server messages
+        prev.forEach((m) => {
+          if (!serverIds.has(m.id)) {
+            const interval = burnIntervalsRef.current.get(m.id);
+            if (interval) {
+              clearInterval(interval);
+              burnIntervalsRef.current.delete(m.id);
+            }
+            burningIdsRef.current.delete(m.id);
+          }
+        });
+        return next;
+      });
+
       if (thread.burn_on_read) {
-        decrypted.forEach((m) => {
+        decryptedRows.forEach((m) => {
           if (m.sender_id !== currentUserId) {
             handleIncomingBurn(m.id);
           } else if (m.read_at) {
@@ -172,13 +232,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           }
         });
       }
-    })();
+    };
 
-    // Realtime channel for messages + ephemeral WebSocket presence (online & typing)
+    syncFromServer();
+    const syncTimer = setInterval(syncFromServer, 2500);
+
+    // Realtime channel for WAL postgres_changes + instant WebSocket broadcast + ephemeral presence
     const channel = supabase
       .channel(`realtime:messages:${thread.id}`, {
         config: {
           presence: { key: currentUserId },
+          broadcast: { self: false },
         },
       })
       .on('presence', { event: 'sync' }, () => {
@@ -201,6 +265,26 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         setPartnerOnline(otherOnline);
         setPartnerTyping(otherTyping);
       })
+      .on('broadcast', { event: 'new_msg' }, async ({ payload }) => {
+        if (payload && payload.thread_id === thread.id) {
+          await applyIncomingRow(payload as Message);
+        }
+      })
+      .on('broadcast', { event: 'del_msg' }, ({ payload }) => {
+        if (payload?.id) {
+          setMessages((prev) => prev.filter((m) => m.id !== payload.id));
+        }
+      })
+      .on('broadcast', { event: 'read_msg' }, ({ payload }) => {
+        if (payload?.id && payload?.read_at && thread.burn_on_read) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === payload.id ? { ...m, read_at: payload.read_at } : m))
+          );
+          const elapsed = Math.floor((Date.now() - new Date(payload.read_at).getTime()) / 1000);
+          const remaining = Math.max(1, 8 - elapsed);
+          startBurnCountdown(payload.id, remaining, false);
+        }
+      })
       .on(
         'postgres_changes',
         {
@@ -211,22 +295,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         },
         async (payload) => {
           if (payload.eventType === 'INSERT') {
-            const rawMsg = payload.new as Message;
-            const plainContent = await decryptMessage(rawMsg.content);
-            const decryptedMsg: DecryptedMessage = {
-              ...rawMsg,
-              content: plainContent,
-            };
-
-            setMessages((prev) => {
-              if (prev.some((m) => m.id === decryptedMsg.id)) return prev;
-              return [...prev, decryptedMsg];
-            });
-
-            // If incoming message and burn_on_read is true, trigger burn countdown
-            if (rawMsg.sender_id !== currentUserId && thread.burn_on_read) {
-              handleIncomingBurn(rawMsg.id);
-            }
+            await applyIncomingRow(payload.new as Message);
           } else if (payload.eventType === 'DELETE') {
             setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
           } else if (payload.eventType === 'UPDATE') {
@@ -257,6 +326,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     return () => {
       mounted = false;
+      clearInterval(syncTimer);
       channelRef.current = null;
       supabase.removeChannel(channel);
     };
@@ -323,6 +393,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
 
     if (data) {
+      channelRef.current?.send({
+        type: 'broadcast',
+        event: 'new_msg',
+        payload: data,
+      });
+
       const newMsg: DecryptedMessage = {
         ...data,
         content: rawPayload,
@@ -420,6 +496,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       Alert.alert('Unsend Error', error.message);
       return;
     }
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'del_msg',
+      payload: { id: msg.id },
+    });
     setMessages((prev) => prev.filter((m) => m.id !== msg.id));
   };
 
@@ -433,7 +514,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     .slice(0, 2) || 'C';
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       {/* Top Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={onBack}>
@@ -471,13 +552,20 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         </View>
       </View>
 
-      {/* Messages Canvas with WhatsApp dark doodle overlay */}
-      <View style={styles.canvas}>
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.messagesList}
+      {/* Body + Composer wrapped in KeyboardAvoidingView so textbox always sits on top of keyboard on Android & iOS */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior="padding"
+        keyboardVerticalOffset={0}
+      >
+        {/* Messages Canvas */}
+        <View style={styles.canvas}>
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            keyExtractor={(item) => item.id}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.messagesList}
           onContentSizeChange={() => {
             if (!showScrollBottom) {
               flatListRef.current?.scrollToEnd({ animated: false });
@@ -598,13 +686,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <Ionicons name="arrow-down" size={20} color={whatsappTheme.textPrimary} />
           </TouchableOpacity>
         ) : null}
-      </View>
+        </View>
 
-      {/* WhatsApp Pill Composer */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
-      >
         {/* Reply Preview Banner */}
         {replyTo ? (
           <View style={styles.replyBanner}>
