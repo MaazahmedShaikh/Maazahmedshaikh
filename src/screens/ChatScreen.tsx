@@ -188,15 +188,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     []
   );
 
-  // Burn on read (receiver): mark read_at in Supabase so sender syncs, then count down 8s and delete
+  // Burn on read (receiver): mark read_at & shorten expires_at to 8s in Supabase so it waits while offline,
+  // syncs countdown to sender, and gets purged even if receiver closes the app before 8s finishes.
   const handleIncomingBurn = useCallback(
     async (messageId: string) => {
       if (burningIdsRef.current.has(messageId)) return;
       startBurnCountdown(messageId, 8, true);
-      const readAt = new Date().toISOString();
+      const nowMs = Date.now();
+      const readAt = new Date(nowMs).toISOString();
+      const burnExpiresAt = new Date(nowMs + 8000).toISOString();
       await supabase
         .from('messages')
-        .update({ read_at: readAt })
+        .update({ read_at: readAt, expires_at: burnExpiresAt })
         .eq('id', messageId);
 
       channelRef.current?.send({
@@ -504,8 +507,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
 
     const disappearSecs = thread.disappear_seconds || 60;
-    const nowIso = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + disappearSecs * 1000).toISOString();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
+    // If burn_on_read is ON, keep unread message queued up to 7 days until recipient actually reads it
+    const ttlMs = thread.burn_on_read ? 7 * 86400 * 1000 : disappearSecs * 1000;
+    const expiresAt = new Date(nowMs + ttlMs).toISOString();
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     // Optimistic UI: show bubble immediately on tap without waiting for network
@@ -735,7 +741,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 <Text style={styles.headerSubtitle}>
                   {partnerOnline ? 'online • ' : ''}
                   {thread.burn_on_read
-                    ? `🔥 Burn (${formatTimerLabel(thread.disappear_seconds || 60)})`
+                    ? '🔥 Burn on read (8s)'
                     : `⏱ ${formatTimerLabel(thread.disappear_seconds || 60)} timer`}
                 </Text>
                 <Ionicons name="chevron-down" size={12} color={whatsappTheme.textSecondary} />
@@ -1031,12 +1037,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <Text style={styles.timerTitle}>Disappearing Message Timer</Text>
             <View style={styles.timerPillsRow}>
               {TIMER_OPTIONS.map((opt) => {
-                const active = (thread.disappear_seconds || 60) === opt.seconds;
+                const active = !thread.burn_on_read && (thread.disappear_seconds || 60) === opt.seconds;
                 return (
                   <TouchableOpacity
                     key={opt.label}
                     style={[styles.timerPill, active && styles.timerPillActive]}
-                    onPress={() => handleUpdateTimer({ disappear_seconds: opt.seconds })}
+                    onPress={() =>
+                      handleUpdateTimer({ disappear_seconds: opt.seconds, burn_on_read: false })
+                    }
                   >
                     <Text style={[styles.timerPillText, active && styles.timerPillTextActive]}>
                       {opt.label}
@@ -1050,7 +1058,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               <View style={{ flex: 1, paddingRight: 10 }}>
                 <Text style={styles.actionText}>Burn on Read (8s)</Text>
                 <Text style={{ color: whatsappTheme.textSecondary, fontSize: 12, marginTop: 2 }}>
-                  Delete message 8 seconds after recipient reads it.
+                  Message waits safely while offline, then burns 8s after recipient reads it.
                 </Text>
               </View>
               <Switch

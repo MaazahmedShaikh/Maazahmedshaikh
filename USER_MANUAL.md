@@ -50,8 +50,8 @@ Press and hold any conversation in the **Chats** list to open its options:
 * **Hide / Unhide Chat:** Removes the chat from the main list. Type **`9999`** in the search bar to reveal hidden chats.
 * **Set / Remove 4-Digit PIN:** Protects that specific chat with a 4-digit SHA-256 hashed PIN.
   * *Anti-Intrusion Lockout:* **3 wrong PIN attempts** trigger a **1-hour lockout** and return to the calculator.
-* **Disappear Timer:** Cycle message expiration between **`10s`**, **`1m`**, **`1h`**, and **`24h`**.
-* **Burn on Read (Default ON):** When the recipient reads an incoming message, an **8-second countdown** starts and permanently deletes the message from Supabase.
+* **Disappear Timer (Timed Mode):** Cycle message expiration between **`10s`**, **`1m`**, **`1h`**, and **`24h`** from the time sent (turns off Burn on Read).
+* **Burn on Read (Default ON):** Messages wait safely while the recipient is offline/inactive (up to 7 days), then trigger an **8-second countdown** and permanently delete as soon as the recipient reads them.
 * **Delete Chat:** Permanently deletes the conversation and all its messages.
 
 ---
