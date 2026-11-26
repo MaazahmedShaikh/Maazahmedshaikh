@@ -21,9 +21,9 @@ export function usePrivacyGuard({ onPanicLock, isActiveScreenSecure = false }: P
   useEffect(() => {
     try {
       if (Platform.OS === 'android') {
-        ScreenCapture.preventScreenCaptureAsync().catch(() => {});
+        ScreenCapture.preventScreenCaptureAsync().catch(() => { });
       }
-    } catch {}
+    } catch { }
   }, []);
 
   // AppState: only lock when explicitly going to background (not during active use or transitions)
@@ -75,14 +75,14 @@ export function usePrivacyGuard({ onPanicLock, isActiveScreenSecure = false }: P
           }
         }
       });
-    } catch (e) {
+    } catch {
       // Gracefully continue if sensors are restricted
     }
 
     return () => {
       try {
         subscription?.remove?.();
-      } catch {}
+      } catch { }
       if (faceDownTimer.current) {
         clearTimeout(faceDownTimer.current);
         faceDownTimer.current = null;

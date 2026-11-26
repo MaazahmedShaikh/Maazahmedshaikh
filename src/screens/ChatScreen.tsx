@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -41,9 +41,77 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [sending, setSending] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
+  // Burn on read: grace timer (8 seconds) then permanent deletion from Supabase
+  const handleIncomingBurn = useCallback(async (messageId: string) => {
+    // Mark read in Supabase
+    await supabase
+      .from('messages')
+      .update({ read_at: new Date().toISOString() })
+      .eq('id', messageId);
+
+    // Set 8-second countdown in memory
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, isBurning: true, remainingSeconds: 8 } : m
+      )
+    );
+
+    // Start tick-down and delete
+    let remaining = 8;
+    const interval = setInterval(async () => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        // Delete permanently from Supabase
+        await supabase.from('messages').delete().eq('id', messageId);
+        // Remove from local memory
+        setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      } else {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === messageId ? { ...m, remainingSeconds: remaining } : m))
+        );
+      }
+    }, 1000);
+  }, []);
+
   // Fetch initial messages for thread and subscribe to Realtime
   useEffect(() => {
-    loadMessages();
+    let mounted = true;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('thread_id', thread.id)
+        .order('created_at', { ascending: true });
+
+      if (!mounted || error || !data) return;
+
+      const now = new Date();
+      const validMessages = data.filter((m: Message) => new Date(m.expires_at) > now);
+
+      const decrypted = await Promise.all(
+        validMessages.map(async (m: Message) => {
+          const content = await decryptMessage(m.content);
+          return {
+            ...m,
+            content,
+          } as DecryptedMessage;
+        })
+      );
+
+      if (!mounted) return;
+      setMessages(decrypted);
+
+      // Trigger burn for any unread incoming messages when opening chat
+      if (thread.burn_on_read) {
+        decrypted.forEach((m) => {
+          if (m.sender_id !== currentUserId) {
+            handleIncomingBurn(m.id);
+          }
+        });
+      }
+    })();
 
     // Realtime channel for messages in this thread
     const channel = supabase
@@ -90,76 +158,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       .subscribe();
 
     return () => {
+      mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [thread.id, currentUserId]);
-
-  const loadMessages = async () => {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('thread_id', thread.id)
-      .order('created_at', { ascending: true });
-
-    if (!error && data) {
-      const now = new Date();
-      const validMessages = data.filter((m: Message) => new Date(m.expires_at) > now);
-
-      const decrypted = await Promise.all(
-        validMessages.map(async (m: Message) => {
-          const content = await decryptMessage(m.content);
-          return {
-            ...m,
-            content,
-          } as DecryptedMessage;
-        })
-      );
-
-      setMessages(decrypted);
-
-      // Trigger burn for any unread incoming messages when opening chat
-      if (thread.burn_on_read) {
-        decrypted.forEach((m) => {
-          if (m.sender_id !== currentUserId) {
-            handleIncomingBurn(m.id);
-          }
-        });
-      }
-    }
-  };
-
-  // Burn on read: grace timer (8 seconds) then permanent deletion from Supabase
-  const handleIncomingBurn = async (messageId: string) => {
-    // Mark read in Supabase
-    await supabase
-      .from('messages')
-      .update({ read_at: new Date().toISOString() })
-      .eq('id', messageId);
-
-    // Set 8-second countdown in memory
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId ? { ...m, isBurning: true, remainingSeconds: 8 } : m
-      )
-    );
-
-    // Start tick-down and delete
-    let remaining = 8;
-    const interval = setInterval(async () => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        clearInterval(interval);
-        // Delete permanently from Supabase
-        await supabase.from('messages').delete().eq('id', messageId);
-        // Remove from local memory
-        setMessages((prev) => prev.filter((m) => m.id !== messageId));
-      } else {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === messageId ? { ...m, remainingSeconds: remaining } : m))
-        );
-      }
-    }, 1000);
-  };
+  }, [thread.id, thread.burn_on_read, currentUserId, handleIncomingBurn]);
 
   // 1-second interval to purge expired messages from memory and clean up expired rows
   useEffect(() => {

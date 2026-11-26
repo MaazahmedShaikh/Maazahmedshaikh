@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -54,9 +54,39 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   const [pinMode, setPinMode] = useState<'verify' | 'set'>('verify');
   const [pinError, setPinError] = useState<string | undefined>(undefined);
 
+  const fetchThreads = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('threads')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      Alert.alert('Database Error', error.message);
+    } else if (data) {
+      setThreads(data as Thread[]);
+    }
+    setLoading(false);
+  }, []);
+
   // Fetch threads and subscribe to Realtime
   useEffect(() => {
-    fetchThreads();
+    let mounted = true;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from('threads')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!mounted) return;
+      if (error) {
+        Alert.alert('Database Error', error.message);
+      } else if (data) {
+        setThreads(data as Thread[]);
+      }
+      setLoading(false);
+    })();
 
     // Subscribe to Realtime changes on 'threads' table
     const channel = supabase
@@ -79,24 +109,10 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       .subscribe();
 
     return () => {
+      mounted = false;
       supabase.removeChannel(channel);
     };
   }, []);
-
-  const fetchThreads = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('threads')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      Alert.alert('Database Error', error.message);
-    } else if (data) {
-      setThreads(data as Thread[]);
-    }
-    setLoading(false);
-  };
 
   const handleCreateThread = async () => {
     if (!newChatTitle.trim()) return;
@@ -415,9 +431,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
 
           const safeTime = item.created_at
             ? new Date(item.created_at).toLocaleTimeString([], {
-                hour: '2-digit',
-                minute: '2-digit',
-              })
+              hour: '2-digit',
+              minute: '2-digit',
+            })
             : '';
 
           return (
