@@ -32,6 +32,7 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
   const [operator, setOperator] = useState<string | null>(null);
   const [waitingForOperand, setWaitingForOperand] = useState(false);
   const [keyBuffer, setKeyBuffer] = useState<string>('');
+  const [expressionPreview, setExpressionPreview] = useState<string>('');
 
   const triggerHaptic = () => {
     try {
@@ -51,6 +52,7 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
           setPreviousValue(null);
           setOperator(null);
           setKeyBuffer('');
+          setExpressionPreview('');
           onUnlockVault();
           return true;
         }
@@ -59,6 +61,7 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
         setPreviousValue(null);
         setOperator(null);
         setKeyBuffer('');
+        setExpressionPreview('');
         onTriggerDuress();
         return true;
       } else if (nextBuffer.endsWith(`${decoyNotesCode}=`)) {
@@ -66,6 +69,7 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
         setPreviousValue(null);
         setOperator(null);
         setKeyBuffer('');
+        setExpressionPreview('');
         onOpenDecoyNotes();
         return true;
       }
@@ -103,6 +107,7 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
     setPreviousValue(null);
     setOperator(null);
     setWaitingForOperand(false);
+    setExpressionPreview('');
   };
 
   const handleToggleSign = () => {
@@ -144,10 +149,12 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
 
     if (previousValue === null) {
       setPreviousValue(inputValue);
+      setExpressionPreview(`${inputValue} ${nextOp}`);
     } else if (operator) {
       const result = performCalculation(operator, previousValue, inputValue);
       setDisplayValue(String(result));
       setPreviousValue(result);
+      setExpressionPreview(`${result} ${nextOp}`);
     }
 
     setWaitingForOperand(true);
@@ -162,6 +169,7 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
     const inputValue = parseFloat(displayValue);
 
     if (operator && previousValue !== null) {
+      setExpressionPreview(`${previousValue} ${operator} ${inputValue} =`);
       const result = performCalculation(operator, previousValue, inputValue);
       setDisplayValue(String(Number(result.toFixed(8))));
       setPreviousValue(null);
@@ -206,6 +214,11 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
     <SafeAreaView style={styles.container}>
       {/* Calculator Display */}
       <View style={styles.displayContainer}>
+        {expressionPreview ? (
+          <Text numberOfLines={1} style={styles.expressionText}>
+            {expressionPreview}
+          </Text>
+        ) : null}
         <Text
           numberOfLines={1}
           adjustsFontSizeToFit
@@ -265,7 +278,14 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
     justifyContent: 'flex-end',
     alignItems: 'flex-end',
-    minHeight: 120,
+    minHeight: 132,
+  },
+  expressionText: {
+    color: '#8E8E93',
+    fontSize: 22,
+    fontWeight: '400',
+    marginBottom: 6,
+    textAlign: 'right',
   },
   displayText: {
     color: '#FFFFFF',

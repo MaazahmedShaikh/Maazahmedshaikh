@@ -2,9 +2,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -13,10 +16,22 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../lib/supabase';
 import { decryptMessage, encryptMessage } from '../lib/cryptoCodec';
+import {
+  decodeMessagePayload,
+  encodeMessagePayload,
+  ReplyPreview,
+} from '../lib/messagePayload';
 import { Message, Thread } from '../types/database';
 import { whatsappTheme } from '../theme/whatsappTheme';
+
+const QUICK_EMOJIS = [
+  '😀', '😂', '😍', '🥰', '😘', '😊', '🤔', '😭',
+  '🙏', '🔥', '❤️', '👍', '🎉', '👀', '💯', '✨',
+];
 
 interface ChatScreenProps {
   thread: Thread;
@@ -41,6 +56,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [sending, setSending] = useState(false);
   const [partnerOnline, setPartnerOnline] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
+  const [replyTo, setReplyTo] = useState<ReplyPreview | null>(null);
+  const [selectedMsg, setSelectedMsg] = useState<DecryptedMessage | null>(null);
+  const [emojiVisible, setEmojiVisible] = useState(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
   const flatListRef = useRef<FlatList>(null);
   const channelRef = useRef<any>(null);
@@ -269,16 +289,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
-  const handleSendMessage = async () => {
-    const text = inputText.trim();
-    if (!text || sending) return;
-
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {}
-
+  const sendEncryptedPayload = async (rawPayload: string) => {
     setSending(true);
-    setInputText('');
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
@@ -287,9 +299,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     const disappearSecs = thread.disappear_seconds || 60;
     const expiresAt = new Date(Date.now() + disappearSecs * 1000).toISOString();
-
-    // Client-side cipher encryption before sending to Supabase
-    const encryptedContent = await encryptMessage(text);
+    const encryptedContent = await encryptMessage(rawPayload);
 
     const { data, error } = await supabase
       .from('messages')
@@ -305,12 +315,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setSending(false);
 
     if (error) {
-      setInputText(text);
       Alert.alert('Send Error', error.message);
-    } else if (data) {
+      return false;
+    }
+
+    if (data) {
       const newMsg: DecryptedMessage = {
         ...data,
-        content: text,
+        content: rawPayload,
       };
       setMessages((prev) => {
         if (prev.some((m) => m.id === newMsg.id)) return prev;
@@ -320,6 +332,92 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 100);
     }
+    return true;
+  };
+
+  const handleSendMessage = async () => {
+    const text = inputText.trim();
+    if (!text || sending) return;
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+
+    const currentReply = replyTo;
+    setInputText('');
+    setReplyTo(null);
+    setEmojiVisible(false);
+
+    const payload = encodeMessagePayload({ text, replyTo: currentReply });
+    const ok = await sendEncryptedPayload(payload);
+    if (!ok) {
+      setInputText(text);
+      setReplyTo(currentReply);
+    }
+  };
+
+  const handlePickImage = async () => {
+    if (sending) return;
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Permission Required', 'Allow photo library access to share images.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 0.4,
+        base64: true,
+      });
+
+      if (result.canceled || !result.assets?.[0]?.base64) return;
+
+      const caption = inputText.trim() || undefined;
+      const currentReply = replyTo;
+      setInputText('');
+      setReplyTo(null);
+      setEmojiVisible(false);
+
+      const payload = encodeMessagePayload({
+        text: caption,
+        imageBase64: result.assets[0].base64,
+        replyTo: currentReply,
+      });
+      await sendEncryptedPayload(payload);
+    } catch {
+      Alert.alert('Image Error', 'Unable to attach image.');
+    }
+  };
+
+  const handleCopyMessage = async (msg: DecryptedMessage) => {
+    const parsed = decodeMessagePayload(msg.content);
+    const copyText = parsed.text || '';
+    setSelectedMsg(null);
+    if (copyText) {
+      await Clipboard.setStringAsync(copyText);
+    }
+  };
+
+  const handleReplyMessage = (msg: DecryptedMessage) => {
+    const parsed = decodeMessagePayload(msg.content);
+    const preview = parsed.imageBase64
+      ? parsed.text
+        ? `📷 ${parsed.text}`
+        : '📷 Photo'
+      : parsed.text || '';
+    setReplyTo({ id: msg.id, preview: preview.slice(0, 80) });
+    setSelectedMsg(null);
+  };
+
+  const handleUnsendMessage = async (msg: DecryptedMessage) => {
+    setSelectedMsg(null);
+    const { error } = await supabase.from('messages').delete().eq('id', msg.id);
+    if (error) {
+      Alert.alert('Unsend Error', error.message);
+      return;
+    }
+    setMessages((prev) => prev.filter((m) => m.id !== msg.id));
   };
 
   const safeTitle = (thread && typeof thread.title === 'string' && thread.title.trim()) ? thread.title : 'Chat';
@@ -377,9 +475,21 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           data={messages}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.messagesList}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          onContentSizeChange={() => {
+            if (!showScrollBottom) {
+              flatListRef.current?.scrollToEnd({ animated: false });
+            }
+          }}
+          onScroll={(e) => {
+            const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+            const distanceFromBottom =
+              contentSize.height - contentOffset.y - layoutMeasurement.height;
+            setShowScrollBottom(distanceFromBottom > 140);
+          }}
+          scrollEventThrottle={100}
           renderItem={({ item }) => {
             const isOutgoing = item.sender_id === currentUserId;
+            const parsed = decodeMessagePayload(item.content);
             const timeStr = new Date(item.created_at).toLocaleTimeString([], {
               hour: '2-digit',
               minute: '2-digit',
@@ -392,13 +502,46 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                   isOutgoing ? styles.outgoingContainer : styles.incomingContainer,
                 ]}
               >
-                <View
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onLongPress={() => {
+                    try {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    } catch {}
+                    setSelectedMsg(item);
+                  }}
                   style={[
                     styles.bubble,
                     isOutgoing ? styles.outgoingBubble : styles.incomingBubble,
                   ]}
                 >
-                  <Text style={styles.messageText}>{item.content}</Text>
+                  {parsed.replyTo ? (
+                    <View style={styles.replyQuoteBox}>
+                      <Text style={styles.replyQuoteText} numberOfLines={2}>
+                        {parsed.replyTo.preview}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {parsed.imageBase64 ? (
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      onPress={() =>
+                        setPreviewImageUri(`data:image/jpeg;base64,${parsed.imageBase64}`)
+                      }
+                      onLongPress={() => setSelectedMsg(item)}
+                    >
+                      <Image
+                        source={{ uri: `data:image/jpeg;base64,${parsed.imageBase64}` }}
+                        style={styles.bubbleImage}
+                        resizeMode="cover"
+                      />
+                    </TouchableOpacity>
+                  ) : null}
+
+                  {parsed.text ? (
+                    <Text style={styles.messageText}>{parsed.text}</Text>
+                  ) : null}
 
                   <View style={styles.metaRow}>
                     {item.isBurning && item.remainingSeconds !== undefined ? (
@@ -423,7 +566,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                       />
                     ) : null}
                   </View>
-                </View>
+                </TouchableOpacity>
               </View>
             );
           }}
@@ -438,6 +581,20 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             </View>
           }
         />
+
+        {/* Floating Scroll-to-Bottom Button */}
+        {showScrollBottom ? (
+          <TouchableOpacity
+            style={styles.scrollBottomBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              setShowScrollBottom(false);
+              flatListRef.current?.scrollToEnd({ animated: true });
+            }}
+          >
+            <Ionicons name="arrow-down" size={20} color={whatsappTheme.textPrimary} />
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {/* WhatsApp Pill Composer */}
@@ -445,14 +602,51 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 10 : 0}
       >
+        {/* Reply Preview Banner */}
+        {replyTo ? (
+          <View style={styles.replyBanner}>
+            <View style={styles.replyBannerBar} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.replyBannerLabel}>Replying to message</Text>
+              <Text style={styles.replyBannerText} numberOfLines={1}>
+                {replyTo.preview}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setReplyTo(null)} style={{ padding: 4 }}>
+              <Ionicons name="close" size={18} color={whatsappTheme.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* Quick Emoji Picker Bar */}
+        {emojiVisible ? (
+          <View style={styles.emojiBar}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {QUICK_EMOJIS.map((em) => (
+                <TouchableOpacity
+                  key={em}
+                  style={styles.emojiBtn}
+                  onPress={() => handleInputChange(inputText + em)}
+                >
+                  <Text style={styles.emojiChar}>{em}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        ) : null}
+
         <View style={styles.composerContainer}>
           <View style={styles.pillInput}>
-            <Ionicons
-              name="happy-outline"
-              size={22}
-              color={whatsappTheme.textSecondary}
+            <TouchableOpacity
+              onPress={() => setEmojiVisible((prev) => !prev)}
               style={{ marginRight: 8 }}
-            />
+            >
+              <Ionicons
+                name={emojiVisible ? 'keypad-outline' : 'happy-outline'}
+                size={22}
+                color={emojiVisible ? whatsappTheme.accentGreen : whatsappTheme.textSecondary}
+              />
+            </TouchableOpacity>
             <TextInput
               style={styles.textInput}
               placeholder="Message"
@@ -461,12 +655,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               onChangeText={handleInputChange}
               multiline
             />
-            <Ionicons
-              name="attach-outline"
-              size={22}
-              color={whatsappTheme.textSecondary}
-              style={{ marginLeft: 8 }}
-            />
+            <TouchableOpacity onPress={handlePickImage} style={{ marginLeft: 8 }}>
+              <Ionicons
+                name="attach-outline"
+                size={22}
+                color={whatsappTheme.textSecondary}
+              />
+            </TouchableOpacity>
           </View>
 
           <TouchableOpacity
@@ -484,6 +679,78 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      {/* Long-Press Message Action Menu */}
+      <Modal
+        visible={Boolean(selectedMsg)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedMsg(null)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setSelectedMsg(null)}
+        >
+          <View style={styles.actionCard}>
+            {selectedMsg ? (
+              <>
+                <TouchableOpacity
+                  style={styles.actionRow}
+                  onPress={() => handleReplyMessage(selectedMsg)}
+                >
+                  <Ionicons name="arrow-undo-outline" size={20} color={whatsappTheme.textPrimary} />
+                  <Text style={styles.actionText}>Reply</Text>
+                </TouchableOpacity>
+
+                {decodeMessagePayload(selectedMsg.content).text ? (
+                  <TouchableOpacity
+                    style={styles.actionRow}
+                    onPress={() => handleCopyMessage(selectedMsg)}
+                  >
+                    <Ionicons name="copy-outline" size={20} color={whatsappTheme.textPrimary} />
+                    <Text style={styles.actionText}>Copy</Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                <TouchableOpacity
+                  style={styles.actionRow}
+                  onPress={() => handleUnsendMessage(selectedMsg)}
+                >
+                  <Ionicons name="trash-outline" size={20} color={whatsappTheme.danger} />
+                  <Text style={[styles.actionText, { color: whatsappTheme.danger }]}>
+                    Unsend (Delete for Both)
+                  </Text>
+                </TouchableOpacity>
+              </>
+            ) : null}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Full-Screen Image Preview Modal */}
+      <Modal
+        visible={Boolean(previewImageUri)}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewImageUri(null)}
+      >
+        <View style={styles.imagePreviewOverlay}>
+          <TouchableOpacity
+            style={styles.imagePreviewClose}
+            onPress={() => setPreviewImageUri(null)}
+          >
+            <Ionicons name="close" size={28} color="#FFFFFF" />
+          </TouchableOpacity>
+          {previewImageUri ? (
+            <Image
+              source={{ uri: previewImageUri }}
+              style={styles.imagePreviewFull}
+              resizeMode="contain"
+            />
+          ) : null}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -666,6 +933,122 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     opacity: 0.5,
+  },
+  replyQuoteBox: {
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    borderLeftWidth: 3,
+    borderLeftColor: whatsappTheme.accentGreen,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 6,
+  },
+  replyQuoteText: {
+    color: whatsappTheme.textSecondary,
+    fontSize: 12,
+  },
+  bubbleImage: {
+    width: 210,
+    height: 210,
+    borderRadius: 8,
+    marginBottom: 4,
+  },
+  scrollBottomBtn: {
+    position: 'absolute',
+    right: 14,
+    bottom: 14,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: whatsappTheme.bgHeader,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  replyBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: whatsappTheme.bgHeader,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: whatsappTheme.divider,
+    gap: 10,
+  },
+  replyBannerBar: {
+    width: 3,
+    height: 30,
+    backgroundColor: whatsappTheme.accentGreen,
+    borderRadius: 2,
+  },
+  replyBannerLabel: {
+    color: whatsappTheme.accentGreen,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  replyBannerText: {
+    color: whatsappTheme.textSecondary,
+    fontSize: 13,
+  },
+  emojiBar: {
+    backgroundColor: whatsappTheme.bgHeader,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: whatsappTheme.divider,
+  },
+  emojiBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  emojiChar: {
+    fontSize: 24,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  actionCard: {
+    width: '80%',
+    backgroundColor: whatsappTheme.bgHeader,
+    borderRadius: 14,
+    paddingVertical: 8,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    gap: 14,
+  },
+  actionText: {
+    color: whatsappTheme.textPrimary,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  imagePreviewOverlay: {
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imagePreviewClose: {
+    position: 'absolute',
+    top: 48,
+    right: 20,
+    zIndex: 10,
+    padding: 8,
+  },
+  imagePreviewFull: {
+    width: '100%',
+    height: '80%',
   },
 });
 

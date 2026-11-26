@@ -32,8 +32,9 @@ SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised 
 1. On the **Chats** screen, tap the **green chat button** (bottom-right) or tap **`⋮` > New chat**.
 2. Enter a conversation name (e.g., `Farnaz`) and tap **Create**.
 3. Type your message and tap **Send**:
-   - Messages are encrypted on your device using your shared `EXPO_PUBLIC_CIPHER_SECRET` before leaving your phone.
-   - Both phones sync in real time via Supabase Realtime.
+   - **Encrypted Photos:** Tap the paperclip icon (`📎`) to pick a photo from your library — it is compressed, encrypted client-side, and auto-burns on read with zero disk storage. Tap any photo in chat for full-screen preview.
+   - **Emoji Bar & Scroll Button:** Tap the smiley icon (`😊`) to open the quick emoji bar. When scrolled up in a chat, tap the floating **`↓`** button to jump to the latest message.
+   - **Long-Press Message Menu:** Press and hold any message bubble to **Reply** (quote), **Copy**, or **Unsend (Delete for Both)** immediately.
    - **Ephemeral Presence:** See `online` and `typing...` in the chat header via WebSocket memory (zero database writes).
    - **Synced Burn Countdown:** Once the recipient reads a burn-on-read message, both sender and receiver see the live `🔥 8s...` countdown before permanent deletion.
    - **Disguised Alerts:** Incoming messages outside the active chat trigger harmless calculator notifications (e.g., *"Memory register cleared."*) with zero sender or message details.
