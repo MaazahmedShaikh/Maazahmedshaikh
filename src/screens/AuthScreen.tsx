@@ -129,6 +129,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess, onLock })
                 onChangeText={setPassword}
                 secureTextEntry
                 autoCapitalize="none"
+                returnKeyType="done"
+                onSubmitEditing={handleLogin}
               />
             </View>
 

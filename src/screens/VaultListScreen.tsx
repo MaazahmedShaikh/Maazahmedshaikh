@@ -581,6 +581,8 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
               placeholderTextColor={whatsappTheme.textSecondary}
               value={newChatTitle}
               onChangeText={setNewChatTitle}
+              onSubmitEditing={handleCreateThread}
+              returnKeyType="done"
               autoFocus
             />
             <View style={styles.modalActionRow}>
@@ -617,7 +619,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
           onPress={() => setActionSheetVisible(false)}
         >
           <View style={styles.actionSheetContent}>
-            <Text style={styles.actionSheetTitle}>{selectedThread?.title}</Text>
+            <Text style={styles.actionSheetTitle}>
+              {selectedThread ? getThreadDisplayTitle(selectedThread, currentUser) : ''}
+            </Text>
 
             <TouchableOpacity style={styles.actionItem} onPress={toggleHideThread}>
               <Ionicons

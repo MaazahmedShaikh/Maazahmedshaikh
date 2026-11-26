@@ -45,6 +45,7 @@ interface ChatScreenProps {
 interface DecryptedMessage extends Message {
   remainingSeconds?: number;
   isBurning?: boolean;
+  isOptimistic?: boolean;
 }
 
 export const ChatScreen: React.FC<ChatScreenProps> = ({
@@ -68,6 +69,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const flatListRef = useRef<FlatList>(null);
   const channelRef = useRef<any>(null);
   const typingTimeoutRef = useRef<any>(null);
+  const isCurrentlyTypingRef = useRef(false);
+  const decryptedCacheRef = useRef<Map<string, string>>(new Map());
   const burningIdsRef = useRef<Set<string>>(new Set());
   const burnIntervalsRef = useRef<Map<string, any>>(new Map());
 
@@ -152,9 +155,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   useEffect(() => {
     let mounted = true;
 
+    const decryptCached = async (m: Message): Promise<string> => {
+      const cached = decryptedCacheRef.current.get(m.id);
+      if (cached !== undefined) return cached;
+      const plain = await decryptMessage(m.content);
+      decryptedCacheRef.current.set(m.id, plain);
+      return plain;
+    };
+
     const applyIncomingRow = async (rawMsg: Message) => {
       if (new Date(rawMsg.expires_at) <= new Date()) return;
-      const plainContent = await decryptMessage(rawMsg.content);
+      const plainContent = await decryptCached(rawMsg);
       const decryptedMsg: DecryptedMessage = {
         ...rawMsg,
         content: plainContent,
@@ -188,7 +199,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       const decryptedRows = await Promise.all(
         validRows.map(async (m) => {
-          const content = await decryptMessage(m.content);
+          const content = await decryptCached(m);
           return { ...m, content } as DecryptedMessage;
         })
       );
@@ -207,15 +218,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               }
             : row;
         });
-        // Preserve any just-sent local message not yet pruned, drop deleted server messages
+        // Keep mid-flight optimistic messages so UI never flickers while uploading
         prev.forEach((m) => {
-          if (!serverIds.has(m.id)) {
+          if (m.isOptimistic && !serverIds.has(m.id)) {
+            next.push(m);
+          } else if (!m.isOptimistic && !serverIds.has(m.id)) {
             const interval = burnIntervalsRef.current.get(m.id);
             if (interval) {
               clearInterval(interval);
               burnIntervalsRef.current.delete(m.id);
             }
             burningIdsRef.current.delete(m.id);
+            decryptedCacheRef.current.delete(m.id);
           }
         });
         return next;
@@ -348,7 +362,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     if (!ch) return;
 
     const isTyping = text.trim().length > 0;
-    ch.track({ online: true, typing: isTyping }).catch(() => {});
+    if (isTyping !== isCurrentlyTypingRef.current) {
+      isCurrentlyTypingRef.current = isTyping;
+      ch.track({ online: true, typing: isTyping }).catch(() => {});
+    }
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -357,7 +374,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     if (isTyping) {
       typingTimeoutRef.current = setTimeout(() => {
-        channelRef.current?.track({ online: true, typing: false }).catch(() => {});
+        if (isCurrentlyTypingRef.current) {
+          isCurrentlyTypingRef.current = false;
+          channelRef.current?.track({ online: true, typing: false }).catch(() => {});
+        }
       }, 2500);
     }
   };
@@ -368,10 +388,32 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = null;
     }
-    channelRef.current?.track({ online: true, typing: false }).catch(() => {});
+    if (isCurrentlyTypingRef.current) {
+      isCurrentlyTypingRef.current = false;
+      channelRef.current?.track({ online: true, typing: false }).catch(() => {});
+    }
 
     const disappearSecs = thread.disappear_seconds || 60;
+    const nowIso = new Date().toISOString();
     const expiresAt = new Date(Date.now() + disappearSecs * 1000).toISOString();
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+    // Optimistic UI: show bubble immediately on tap without waiting for network
+    const optimisticMsg: DecryptedMessage = {
+      id: tempId,
+      thread_id: thread.id,
+      sender_id: currentUserId,
+      content: rawPayload,
+      read_at: null,
+      expires_at: expiresAt,
+      created_at: nowIso,
+      isOptimistic: true,
+    };
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setTimeout(() => {
+      flatListRef.current?.scrollToEnd({ animated: true });
+    }, 50);
+
     const encryptedContent = await encryptMessage(rawPayload);
 
     const { data, error } = await supabase
@@ -388,28 +430,28 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setSending(false);
 
     if (error) {
+      setMessages((prev) => prev.filter((m) => m.id !== tempId));
       Alert.alert('Send Error', error.message);
       return false;
     }
 
     if (data) {
+      decryptedCacheRef.current.set(data.id, rawPayload);
       channelRef.current?.send({
         type: 'broadcast',
         event: 'new_msg',
         payload: data,
       });
 
-      const newMsg: DecryptedMessage = {
+      const confirmedMsg: DecryptedMessage = {
         ...data,
         content: rawPayload,
+        isOptimistic: false,
       };
       setMessages((prev) => {
-        if (prev.some((m) => m.id === newMsg.id)) return prev;
-        return [...prev, newMsg];
+        const withoutTemp = prev.filter((m) => m.id !== tempId && m.id !== confirmedMsg.id);
+        return [...withoutTemp, confirmedMsg];
       });
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
     }
     return true;
   };
@@ -650,7 +692,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
                     {isOutgoing ? (
                       <Ionicons
-                        name="checkmark-done"
+                        name={item.isOptimistic ? 'time-outline' : 'checkmark-done'}
                         size={15}
                         color={item.read_at ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
                         style={{ marginLeft: 3 }}

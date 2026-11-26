@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Text, TouchableOpacity } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -62,6 +62,13 @@ export default function App() {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutTimestamp, setLockoutTimestamp] = useState<number | null>(null);
   const [stealthConfig, setStealthConfig] = useState<StealthConfig>(DEFAULT_STEALTH_CONFIG);
+  const currentScreenRef = useRef<RootScreen>(currentScreen);
+  const activeThreadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentScreenRef.current = currentScreen;
+    activeThreadIdRef.current = activeThread?.id ?? null;
+  }, [currentScreen, activeThread?.id]);
 
   // Check if currently locked out
   const isLockedOut = Boolean(
@@ -116,7 +123,8 @@ export default function App() {
           const msg = payload.new as { sender_id?: string; thread_id?: string };
           if (msg.sender_id && msg.sender_id !== currentUser.id) {
             const viewingThisChat =
-              currentScreen === 'chat' && activeThread?.id === msg.thread_id;
+              currentScreenRef.current === 'chat' &&
+              activeThreadIdRef.current === msg.thread_id;
             if (!viewingThisChat) {
               triggerDisguisedNotification();
             }
@@ -128,7 +136,7 @@ export default function App() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [currentUser, stealthConfig.disguisedNotifications, currentScreen, activeThread?.id]);
+  }, [currentUser, stealthConfig.disguisedNotifications]);
 
   const handleTriggerDuress = async () => {
     if (stealthConfig.duressAction === 'wipe') {
