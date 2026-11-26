@@ -62,9 +62,11 @@ export default function App() {
   const [lockoutTimestamp, setLockoutTimestamp] = useState<number | null>(null);
   const [stealthConfig, setStealthConfig] = useState<StealthConfig>(DEFAULT_STEALTH_CONFIG);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [suspendAutoLock, setSuspendAutoLock] = useState(false);
   const currentScreenRef = useRef<RootScreen>(currentScreen);
   const activeThreadIdRef = useRef<string | null>(null);
   const disguisedNotifRef = useRef<boolean>(stealthConfig.disguisedNotifications);
+  const suspendAutoLockRef = useRef<boolean>(false);
   const inactivityTimerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -75,6 +77,10 @@ export default function App() {
   useEffect(() => {
     disguisedNotifRef.current = stealthConfig.disguisedNotifications;
   }, [stealthConfig.disguisedNotifications]);
+
+  useEffect(() => {
+    suspendAutoLockRef.current = suspendAutoLock;
+  }, [suspendAutoLock]);
 
   // Check if currently locked out
   const isLockedOut = Boolean(
@@ -87,6 +93,7 @@ export default function App() {
       clearTimeout(inactivityTimerRef.current);
       inactivityTimerRef.current = null;
     }
+    setSuspendAutoLock(false);
     setCurrentScreen('calculator');
     setActiveThread(null);
     setUnlockedThreadIds(new Set());
@@ -99,7 +106,7 @@ export default function App() {
       inactivityTimerRef.current = null;
     }
     const timeoutSecs = stealthConfig.inactivityTimeoutSeconds;
-    if (currentScreenRef.current !== 'calculator' && timeoutSecs > 0) {
+    if (currentScreenRef.current !== 'calculator' && timeoutSecs > 0 && !suspendAutoLockRef.current) {
       inactivityTimerRef.current = setTimeout(() => {
         handlePanicLock();
       }, timeoutSecs * 1000);
@@ -114,7 +121,7 @@ export default function App() {
         inactivityTimerRef.current = null;
       }
     };
-  }, [currentScreen, stealthConfig.inactivityTimeoutSeconds, resetInactivityTimer]);
+  }, [currentScreen, stealthConfig.inactivityTimeoutSeconds, suspendAutoLock, resetInactivityTimer]);
 
   // Hook privacy guard: screenshots blocked, auto-lock on blur/shake/face-down
   // Only activate accelerometer motion sensors when inside secure screens (avoids calculator vibration triggers)
@@ -123,6 +130,7 @@ export default function App() {
     onPanicLock: handlePanicLock,
     isActiveScreenSecure: isSecureScreen,
     motionAutoLock: stealthConfig.motionAutoLock,
+    suspendAutoLock,
   });
 
   // Check Supabase Auth state & load StealthConfig on mount
@@ -334,6 +342,7 @@ export default function App() {
             currentUserId={currentUser.id}
             currentUser={currentUser}
             onUpdateThread={setActiveThread}
+            onSuspendAutoLock={setSuspendAutoLock}
             onBack={() => {
               setActiveThread(null);
               setCurrentScreen('vault_list');

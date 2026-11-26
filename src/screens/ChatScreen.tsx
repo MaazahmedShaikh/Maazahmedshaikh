@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { supabase } from '../lib/supabase';
 import { decryptMessage, encryptMessage } from '../lib/cryptoCodec';
 import {
@@ -51,6 +52,7 @@ interface ChatScreenProps {
   currentUserId: string;
   currentUser?: User | null;
   onUpdateThread?: (updated: Thread) => void;
+  onSuspendAutoLock?: (suspend: boolean) => void;
   onBack: () => void;
   onLock: () => void;
 }
@@ -125,6 +127,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   currentUserId,
   currentUser,
   onUpdateThread,
+  onSuspendAutoLock,
   onBack,
   onLock,
 }) => {
@@ -595,6 +598,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
   const handlePickImage = async () => {
     if (sending) return;
+    let selectedUri: string | null = null;
+    let selectedWidth = 0;
+    let selectedHeight = 0;
+
+    onSuspendAutoLock?.(true);
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
@@ -604,11 +612,43 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        quality: 0.4,
+        quality: 0.7,
+      });
+
+      const asset = result.assets?.[0];
+      if (result.canceled || !asset?.uri) return;
+      selectedUri = asset.uri;
+      selectedWidth = asset.width ?? 0;
+      selectedHeight = asset.height ?? 0;
+    } catch {
+      Alert.alert('Image Error', 'Unable to pick image.');
+      return;
+    } finally {
+      onSuspendAutoLock?.(false);
+    }
+
+    let context: ReturnType<typeof ImageManipulator.manipulate> | null = null;
+    let rendered: Awaited<ReturnType<ReturnType<typeof ImageManipulator.manipulate>['renderAsync']>> | null = null;
+    try {
+      // Normalize HEIC/PNG/48MP photos into compact <=1080px JPEG across iOS & Android
+      context = ImageManipulator.manipulate(selectedUri, {
+        maxWidth: 1080,
+        maxHeight: 1080,
+      });
+      if (selectedWidth > 1080 || selectedHeight > 1080) {
+        context.resize(selectedWidth >= selectedHeight ? { width: 1080 } : { height: 1080 });
+      }
+      rendered = await context.renderAsync();
+      const manipulated = await rendered.saveAsync({
+        compress: 0.55,
+        format: SaveFormat.JPEG,
         base64: true,
       });
 
-      if (result.canceled || !result.assets?.[0]?.base64) return;
+      if (!manipulated.base64) {
+        Alert.alert('Image Error', 'Unable to process image.');
+        return;
+      }
 
       const caption = inputText.trim() || undefined;
       const currentReply = replyTo;
@@ -618,12 +658,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
       const payload = encodeMessagePayload({
         text: caption,
-        imageBase64: result.assets[0].base64,
+        imageBase64: manipulated.base64,
         replyTo: currentReply,
       });
       await sendEncryptedPayload(payload);
     } catch {
       Alert.alert('Image Error', 'Unable to attach image.');
+    } finally {
+      try {
+        rendered?.release();
+      } catch {}
+      try {
+        context?.release();
+      } catch {}
     }
   };
 

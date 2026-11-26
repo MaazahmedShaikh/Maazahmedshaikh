@@ -7,20 +7,27 @@ interface PrivacyGuardOptions {
   onPanicLock: () => void;
   isActiveScreenSecure?: boolean;
   motionAutoLock?: boolean;
+  suspendAutoLock?: boolean;
 }
 
 /**
  * Global privacy hook:
  * 1. Prevents screenshots on Android (avoids iOS black screen overlay)
- * 2. Locks app back to calculator on AppState background
+ * 2. Locks app back to calculator on AppState background (unless suspended for OS media picker)
  * 3. Locks app back to calculator on held face-down flip (1 full second) or extreme shake
  */
 export function usePrivacyGuard({
   onPanicLock,
   isActiveScreenSecure = false,
   motionAutoLock = true,
+  suspendAutoLock = false,
 }: PrivacyGuardOptions) {
   const faceDownTimer = useRef<any>(null);
+  const suspendAutoLockRef = useRef(suspendAutoLock);
+
+  useEffect(() => {
+    suspendAutoLockRef.current = suspendAutoLock;
+  }, [suspendAutoLock]);
 
   // Prevent screenshots safely on Android only (avoids iOS black screen overlay)
   useEffect(() => {
@@ -31,10 +38,10 @@ export function usePrivacyGuard({
     } catch { }
   }, []);
 
-  // AppState: only lock when explicitly going to background (not during active use or transitions)
+  // AppState: only lock when explicitly going to background (not during active use or OS media picker)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      if (nextAppState === 'background') {
+      if (nextAppState === 'background' && !suspendAutoLockRef.current) {
         onPanicLock();
       }
     });
@@ -46,7 +53,7 @@ export function usePrivacyGuard({
 
   // Accelerometer: ONLY active when inside secure screens AND motionAutoLock is enabled
   useEffect(() => {
-    if (!isActiveScreenSecure || !motionAutoLock) {
+    if (!isActiveScreenSecure || !motionAutoLock || suspendAutoLock) {
       if (faceDownTimer.current) {
         clearTimeout(faceDownTimer.current);
         faceDownTimer.current = null;
@@ -98,5 +105,5 @@ export function usePrivacyGuard({
         faceDownTimer.current = null;
       }
     };
-  }, [onPanicLock, isActiveScreenSecure, motionAutoLock]);
+  }, [onPanicLock, isActiveScreenSecure, motionAutoLock, suspendAutoLock]);
 }
