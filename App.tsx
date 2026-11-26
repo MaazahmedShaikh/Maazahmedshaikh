@@ -78,7 +78,11 @@ export default function App() {
   // Hook privacy guard: screenshots blocked, auto-lock on blur/shake/face-down
   // Only activate accelerometer motion sensors when inside secure screens (avoids calculator vibration triggers)
   const isSecureScreen = currentScreen !== 'calculator';
-  usePrivacyGuard({ onPanicLock: handlePanicLock, isActiveScreenSecure: isSecureScreen });
+  usePrivacyGuard({
+    onPanicLock: handlePanicLock,
+    isActiveScreenSecure: isSecureScreen,
+    motionAutoLock: stealthConfig.motionAutoLock,
+  });
 
   // Check Supabase Auth state & load StealthConfig on mount
   useEffect(() => {

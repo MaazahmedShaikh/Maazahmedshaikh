@@ -6,6 +6,7 @@ import { Accelerometer } from 'expo-sensors';
 interface PrivacyGuardOptions {
   onPanicLock: () => void;
   isActiveScreenSecure?: boolean;
+  motionAutoLock?: boolean;
 }
 
 /**
@@ -14,7 +15,11 @@ interface PrivacyGuardOptions {
  * 2. Locks app back to calculator on AppState background
  * 3. Locks app back to calculator on held face-down flip (1 full second) or extreme shake
  */
-export function usePrivacyGuard({ onPanicLock, isActiveScreenSecure = false }: PrivacyGuardOptions) {
+export function usePrivacyGuard({
+  onPanicLock,
+  isActiveScreenSecure = false,
+  motionAutoLock = true,
+}: PrivacyGuardOptions) {
   const faceDownTimer = useRef<any>(null);
 
   // Prevent screenshots safely on Android only (avoids iOS black screen overlay)
@@ -39,15 +44,19 @@ export function usePrivacyGuard({ onPanicLock, isActiveScreenSecure = false }: P
     };
   }, [onPanicLock]);
 
-  // Accelerometer: ONLY active when inside the secure screens, and requires held face-down
+  // Accelerometer: ONLY active when inside secure screens AND motionAutoLock is enabled
   useEffect(() => {
-    if (!isActiveScreenSecure) {
+    if (!isActiveScreenSecure || !motionAutoLock) {
       if (faceDownTimer.current) {
         clearTimeout(faceDownTimer.current);
         faceDownTimer.current = null;
       }
       return;
     }
+
+    // iOS CoreMotion reports gravity (-1 face-up), whereas Android SensorManager reports reaction force (+1 face-up).
+    // Normalize Z so face-up is +1 and face-down is -1 on both platforms.
+    const zSign = Platform.OS === 'ios' ? -1 : 1;
 
     let subscription: any = null;
     try {
@@ -61,8 +70,9 @@ export function usePrivacyGuard({ onPanicLock, isActiveScreenSecure = false }: P
           return;
         }
 
-        // 2. Deliberate face-down: must be held face down continuously for 1 full second
-        if (z < -0.92) {
+        // 2. Deliberate face-down: normalizedZ < -0.92 held continuously for 1 full second
+        const normalizedZ = z * zSign;
+        if (normalizedZ < -0.92) {
           if (!faceDownTimer.current) {
             faceDownTimer.current = setTimeout(() => {
               onPanicLock();
@@ -82,11 +92,11 @@ export function usePrivacyGuard({ onPanicLock, isActiveScreenSecure = false }: P
     return () => {
       try {
         subscription?.remove?.();
-      } catch { }
+      } catch {}
       if (faceDownTimer.current) {
         clearTimeout(faceDownTimer.current);
         faceDownTimer.current = null;
       }
     };
-  }, [onPanicLock, isActiveScreenSecure]);
+  }, [onPanicLock, isActiveScreenSecure, motionAutoLock]);
 }

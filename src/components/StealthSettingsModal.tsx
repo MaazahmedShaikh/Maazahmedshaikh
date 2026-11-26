@@ -40,6 +40,7 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
   const [disguisedNotifications, setDisguisedNotifications] = useState(
     config.disguisedNotifications
   );
+  const [motionAutoLock, setMotionAutoLock] = useState(config.motionAutoLock);
 
   const handleSave = async () => {
     const codes = [vaultCode, decoyNotesCode, duressCode];
@@ -62,6 +63,7 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
       duressCode,
       duressAction,
       disguisedNotifications,
+      motionAutoLock,
     });
     onSave(updated);
     onClose();
@@ -172,6 +174,20 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
               <Switch
                 value={disguisedNotifications}
                 onValueChange={setDisguisedNotifications}
+                trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
+              />
+            </View>
+
+            <View style={[styles.switchRow, { marginTop: 14 }]}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text style={styles.fieldLabel}>Flip / Shake Panic Lock</Text>
+                <Text style={styles.helperText}>
+                  Auto-locks to calculator if held face-down for 1s or shaken hard.
+                </Text>
+              </View>
+              <Switch
+                value={motionAutoLock}
+                onValueChange={setMotionAutoLock}
                 trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
               />
             </View>

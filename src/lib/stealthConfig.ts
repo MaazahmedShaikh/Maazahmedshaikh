@@ -11,6 +11,7 @@ export interface StealthConfig {
   duressCode: string;
   duressAction: DuressAction;
   disguisedNotifications: boolean;
+  motionAutoLock: boolean;
 }
 
 export const DEFAULT_STEALTH_CONFIG: StealthConfig = {
@@ -20,6 +21,7 @@ export const DEFAULT_STEALTH_CONFIG: StealthConfig = {
   duressCode: '9111',
   duressAction: 'empty_vault',
   disguisedNotifications: true,
+  motionAutoLock: true,
 };
 
 /**
@@ -40,6 +42,8 @@ export async function loadStealthConfig(): Promise<StealthConfig> {
         typeof parsed.disguisedNotifications === 'boolean'
           ? parsed.disguisedNotifications
           : true,
+      motionAutoLock:
+        typeof parsed.motionAutoLock === 'boolean' ? parsed.motionAutoLock : true,
     };
   } catch {
     return DEFAULT_STEALTH_CONFIG;
@@ -57,6 +61,7 @@ export async function saveStealthConfig(config: StealthConfig): Promise<StealthC
     duressCode: sanitizeCode(config.duressCode, DEFAULT_STEALTH_CONFIG.duressCode),
     duressAction: config.duressAction === 'wipe' ? 'wipe' : 'empty_vault',
     disguisedNotifications: Boolean(config.disguisedNotifications),
+    motionAutoLock: Boolean(config.motionAutoLock),
   };
 
   await AsyncStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(sanitized));
