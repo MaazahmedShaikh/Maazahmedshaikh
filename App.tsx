@@ -4,6 +4,15 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { supabase } from './src/lib/supabase';
+import {
+  DEFAULT_STEALTH_CONFIG,
+  loadStealthConfig,
+  StealthConfig,
+} from './src/lib/stealthConfig';
+import {
+  requestNotificationPermission,
+  triggerDisguisedNotification,
+} from './src/lib/notifications';
 import { RootScreen, Thread, User } from './src/types/database';
 import { usePrivacyGuard } from './src/hooks/usePrivacyGuard';
 import { CalculatorScreen } from './src/screens/CalculatorScreen';
@@ -51,6 +60,7 @@ export default function App() {
   // Anti-Intrusion lockout state (3 failed PIN attempts = 1 hr lockout)
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutTimestamp, setLockoutTimestamp] = useState<number | null>(null);
+  const [stealthConfig, setStealthConfig] = useState<StealthConfig>(DEFAULT_STEALTH_CONFIG);
 
   // Check if currently locked out
   const isLockedOut = Boolean(
@@ -69,8 +79,10 @@ export default function App() {
   const isSecureScreen = currentScreen !== 'calculator';
   usePrivacyGuard({ onPanicLock: handlePanicLock, isActiveScreenSecure: isSecureScreen });
 
-  // Check Supabase Auth state on mount
+  // Check Supabase Auth state & load StealthConfig on mount
   useEffect(() => {
+    loadStealthConfig().then(setStealthConfig);
+
     supabase.auth.getSession().then((res: any) => {
       setCurrentUser(res?.data?.session?.user ?? null);
     });
@@ -83,6 +95,51 @@ export default function App() {
       res?.data?.subscription?.unsubscribe?.();
     };
   }, []);
+
+  // Disguised local notification listener when logged in & enabled
+  useEffect(() => {
+    if (!currentUser || !stealthConfig.disguisedNotifications) return;
+
+    requestNotificationPermission();
+
+    const channel = supabase
+      .channel('realtime:global_disguised_alerts')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          const msg = payload.new as { sender_id?: string; thread_id?: string };
+          if (msg.sender_id && msg.sender_id !== currentUser.id) {
+            const viewingThisChat =
+              currentScreen === 'chat' && activeThread?.id === msg.thread_id;
+            if (!viewingThisChat) {
+              triggerDisguisedNotification();
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [currentUser, stealthConfig.disguisedNotifications, currentScreen, activeThread?.id]);
+
+  const handleTriggerDuress = async () => {
+    if (stealthConfig.duressAction === 'wipe') {
+      try {
+        await supabase.from('messages').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.from('threads').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+        await supabase.auth.signOut();
+        setCurrentUser(null);
+      } catch {
+        // Ignore errors under duress and still show decoy vault
+      }
+    }
+    setActiveThread(null);
+    setUnlockedThreadIds(new Set());
+    setCurrentScreen('duress_vault');
+  };
 
   const handleUnlockVault = () => {
     if (isLockedOut) return;
@@ -140,6 +197,10 @@ export default function App() {
           <CalculatorScreen
             onUnlockVault={handleUnlockVault}
             onOpenDecoyNotes={handleOpenDecoyNotes}
+            onTriggerDuress={handleTriggerDuress}
+            vaultCode={stealthConfig.vaultCode}
+            decoyNotesCode={stealthConfig.decoyNotesCode}
+            duressCode={stealthConfig.duressCode}
             isLockedOut={isLockedOut}
           />
         )}
@@ -163,6 +224,21 @@ export default function App() {
             unlockedThreadIds={unlockedThreadIds}
             onUnlockThreadId={handleUnlockThreadId}
             onRecordFailedAttempt={handleRecordFailedAttempt}
+            stealthConfig={stealthConfig}
+            onUpdateStealthConfig={setStealthConfig}
+          />
+        )}
+
+        {currentScreen === 'duress_vault' && (
+          <VaultListScreen
+            onSelectThread={() => {}}
+            onLock={handlePanicLock}
+            onSignOut={handlePanicLock}
+            unlockedThreadIds={new Set()}
+            onUnlockThreadId={() => {}}
+            onRecordFailedAttempt={() => {}}
+            stealthConfig={stealthConfig}
+            isDuressMode={true}
           />
         )}
 

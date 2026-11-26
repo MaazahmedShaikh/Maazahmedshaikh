@@ -11,12 +11,20 @@ import * as Haptics from 'expo-haptics';
 interface CalculatorScreenProps {
   onUnlockVault: () => void;
   onOpenDecoyNotes: () => void;
+  onTriggerDuress: () => void;
+  vaultCode?: string;
+  decoyNotesCode?: string;
+  duressCode?: string;
   isLockedOut?: boolean;
 }
 
 export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
   onUnlockVault,
   onOpenDecoyNotes,
+  onTriggerDuress,
+  vaultCode = '7391',
+  decoyNotesCode = '0000',
+  duressCode = '9111',
   isLockedOut = false,
 }) => {
   const [displayValue, setDisplayValue] = useState('0');
@@ -32,12 +40,12 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
   };
 
   const updateBufferAndCheckSecret = (token: string) => {
-    const nextBuffer = (keyBuffer + token).slice(-8);
+    const nextBuffer = (keyBuffer + token).slice(-10);
     setKeyBuffer(nextBuffer);
 
     // Stealth codes triggered with '='
     if (token === '=') {
-      if (nextBuffer.endsWith('7391=')) {
+      if (nextBuffer.endsWith(`${vaultCode}=`)) {
         if (!isLockedOut) {
           setDisplayValue('0');
           setPreviousValue(null);
@@ -46,7 +54,14 @@ export const CalculatorScreen: React.FC<CalculatorScreenProps> = ({
           onUnlockVault();
           return true;
         }
-      } else if (nextBuffer.endsWith('0000=')) {
+      } else if (nextBuffer.endsWith(`${duressCode}=`)) {
+        setDisplayValue('0');
+        setPreviousValue(null);
+        setOperator(null);
+        setKeyBuffer('');
+        onTriggerDuress();
+        return true;
+      } else if (nextBuffer.endsWith(`${decoyNotesCode}=`)) {
         setDisplayValue('0');
         setPreviousValue(null);
         setOperator(null);

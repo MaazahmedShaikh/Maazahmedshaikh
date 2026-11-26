@@ -39,42 +39,76 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [messages, setMessages] = useState<DecryptedMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
+  const [partnerOnline, setPartnerOnline] = useState(false);
+  const [partnerTyping, setPartnerTyping] = useState(false);
+
   const flatListRef = useRef<FlatList>(null);
+  const channelRef = useRef<any>(null);
+  const typingTimeoutRef = useRef<any>(null);
+  const burningIdsRef = useRef<Set<string>>(new Set());
+  const burnIntervalsRef = useRef<Map<string, any>>(new Map());
 
-  // Burn on read: grace timer (8 seconds) then permanent deletion from Supabase
-  const handleIncomingBurn = useCallback(async (messageId: string) => {
-    // Mark read in Supabase
-    await supabase
-      .from('messages')
-      .update({ read_at: new Date().toISOString() })
-      .eq('id', messageId);
+  // Starts a synchronized burn countdown in memory for either sender (display) or receiver (delete)
+  const startBurnCountdown = useCallback(
+    (messageId: string, initialSeconds: number, deleteOnZero: boolean) => {
+      if (burningIdsRef.current.has(messageId)) return;
+      burningIdsRef.current.add(messageId);
 
-    // Set 8-second countdown in memory
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === messageId ? { ...m, isBurning: true, remainingSeconds: 8 } : m
-      )
-    );
+      let remaining = Math.max(1, initialSeconds);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, isBurning: true, remainingSeconds: remaining } : m
+        )
+      );
 
-    // Start tick-down and delete
-    let remaining = 8;
-    const interval = setInterval(async () => {
-      remaining -= 1;
-      if (remaining <= 0) {
-        clearInterval(interval);
-        // Delete permanently from Supabase
-        await supabase.from('messages').delete().eq('id', messageId);
-        // Remove from local memory
-        setMessages((prev) => prev.filter((m) => m.id !== messageId));
-      } else {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === messageId ? { ...m, remainingSeconds: remaining } : m))
-        );
+      const interval = setInterval(async () => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          clearInterval(interval);
+          burnIntervalsRef.current.delete(messageId);
+          burningIdsRef.current.delete(messageId);
+          if (deleteOnZero) {
+            await supabase.from('messages').delete().eq('id', messageId);
+          }
+          setMessages((prev) => prev.filter((m) => m.id !== messageId));
+        } else {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === messageId ? { ...m, remainingSeconds: remaining } : m))
+          );
+        }
+      }, 1000);
+
+      burnIntervalsRef.current.set(messageId, interval);
+    },
+    []
+  );
+
+  // Burn on read (receiver): mark read_at in Supabase so sender syncs, then count down 8s and delete
+  const handleIncomingBurn = useCallback(
+    async (messageId: string) => {
+      if (burningIdsRef.current.has(messageId)) return;
+      startBurnCountdown(messageId, 8, true);
+      await supabase
+        .from('messages')
+        .update({ read_at: new Date().toISOString() })
+        .eq('id', messageId);
+    },
+    [startBurnCountdown]
+  );
+
+  // Clean up all burn timers and typing timers on unmount
+  useEffect(() => {
+    const intervals = burnIntervalsRef.current;
+    return () => {
+      intervals.forEach((id) => clearInterval(id));
+      intervals.clear();
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
       }
-    }, 1000);
+    };
   }, []);
 
-  // Fetch initial messages for thread and subscribe to Realtime
+  // Fetch initial messages for thread and subscribe to Realtime + Ephemeral Presence
   useEffect(() => {
     let mounted = true;
 
@@ -103,19 +137,47 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       if (!mounted) return;
       setMessages(decrypted);
 
-      // Trigger burn for any unread incoming messages when opening chat
+      // Trigger burn for unread incoming messages, or sync countdown for read outgoing messages
       if (thread.burn_on_read) {
         decrypted.forEach((m) => {
           if (m.sender_id !== currentUserId) {
             handleIncomingBurn(m.id);
+          } else if (m.read_at) {
+            const elapsed = Math.floor((Date.now() - new Date(m.read_at).getTime()) / 1000);
+            const remaining = Math.max(1, 8 - elapsed);
+            startBurnCountdown(m.id, remaining, false);
           }
         });
       }
     })();
 
-    // Realtime channel for messages in this thread
+    // Realtime channel for messages + ephemeral WebSocket presence (online & typing)
     const channel = supabase
-      .channel(`realtime:messages:${thread.id}`)
+      .channel(`realtime:messages:${thread.id}`, {
+        config: {
+          presence: { key: currentUserId },
+        },
+      })
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState() as Record<
+          string,
+          { online?: boolean; typing?: boolean }[]
+        >;
+        let otherOnline = false;
+        let otherTyping = false;
+
+        Object.entries(state).forEach(([key, presences]) => {
+          if (key !== currentUserId && Array.isArray(presences) && presences.length > 0) {
+            otherOnline = true;
+            if (presences.some((p) => p.typing)) {
+              otherTyping = true;
+            }
+          }
+        });
+
+        setPartnerOnline(otherOnline);
+        setPartnerTyping(otherTyping);
+      })
       .on(
         'postgres_changes',
         {
@@ -152,16 +214,30 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 m.id === updated.id ? { ...m, ...updated, content: plainContent } : m
               )
             );
+
+            // Sync burn countdown on sender screen when recipient marks read_at
+            if (updated.read_at && updated.sender_id === currentUserId && thread.burn_on_read) {
+              const elapsed = Math.floor((Date.now() - new Date(updated.read_at).getTime()) / 1000);
+              const remaining = Math.max(1, 8 - elapsed);
+              startBurnCountdown(updated.id, remaining, false);
+            }
           }
         }
       )
-      .subscribe();
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({ online: true, typing: false });
+        }
+      });
+
+    channelRef.current = channel;
 
     return () => {
       mounted = false;
+      channelRef.current = null;
       supabase.removeChannel(channel);
     };
-  }, [thread.id, thread.burn_on_read, currentUserId, handleIncomingBurn]);
+  }, [thread.id, thread.burn_on_read, currentUserId, handleIncomingBurn, startBurnCountdown]);
 
   // 1-second interval to purge expired messages from memory and clean up expired rows
   useEffect(() => {
@@ -173,6 +249,26 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     return () => clearInterval(timer);
   }, []);
 
+  const handleInputChange = (text: string) => {
+    setInputText(text);
+    const ch = channelRef.current;
+    if (!ch) return;
+
+    const isTyping = text.trim().length > 0;
+    ch.track({ online: true, typing: isTyping }).catch(() => {});
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    if (isTyping) {
+      typingTimeoutRef.current = setTimeout(() => {
+        channelRef.current?.track({ online: true, typing: false }).catch(() => {});
+      }, 2500);
+    }
+  };
+
   const handleSendMessage = async () => {
     const text = inputText.trim();
     if (!text || sending) return;
@@ -183,6 +279,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     setSending(true);
     setInputText('');
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+    channelRef.current?.track({ online: true, typing: false }).catch(() => {});
 
     const disappearSecs = thread.disappear_seconds || 60;
     const expiresAt = new Date(Date.now() + disappearSecs * 1000).toISOString();
@@ -247,11 +348,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             {thread.title}
           </Text>
           <View style={styles.headerSubRow}>
-            {thread.burn_on_read ? (
-              <Text style={styles.headerSubtitle}>🔥 Burn on read</Text>
+            {partnerTyping ? (
+              <Text style={[styles.headerSubtitle, { color: whatsappTheme.accentGreen }]}>
+                typing...
+              </Text>
             ) : (
               <Text style={styles.headerSubtitle}>
-                ⏱ {thread.disappear_seconds}s timer
+                {partnerOnline ? 'online • ' : ''}
+                {thread.burn_on_read
+                  ? '🔥 Burn on read'
+                  : `⏱ ${thread.disappear_seconds}s timer`}
               </Text>
             )}
           </View>
@@ -352,7 +458,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               placeholder="Message"
               placeholderTextColor={whatsappTheme.textSecondary}
               value={inputText}
-              onChangeText={setInputText}
+              onChangeText={handleInputChange}
               multiline
             />
             <Ionicons

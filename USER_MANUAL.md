@@ -6,14 +6,15 @@ SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised 
 
 ## 1. Secret Access Codes
 
-| Where to Enter | Code | Action |
+| Where to Enter | Default Code | Action |
 | :--- | :--- | :--- |
 | **Calculator Keypad** | `7391=` | Unlocks the private messaging vault (Sign In / Chats) |
 | **Calculator Keypad** | `0000=` | Opens **Decoy Notes** (safe cover screen if someone asks to see what's inside) |
+| **Calculator Keypad** | `9111=` | **Duress Code:** Opens an empty decoy vault (or silently wipes data if configured) |
 | **Chats Search Bar** | `9999` | Reveals **Hidden Chats** |
 | **Android Phone Dialer** | `*#*#7391#*#*` | Launches SmartCalc directly *(standalone Android APK only)* |
 
-> **Tip:** All normal calculator math (`+`, `-`, `×`, `÷`, `%`, `+/-`, `.`) works normally so anyone opening the app sees a real calculator.
+> **Tip:** All 4 codes above (`7391`, `0000`, `9111`, `9999`) can be customized anytime under **`⋮` > Stealth settings**. All normal calculator math (`+`, `-`, `×`, `÷`, `%`, `+/-`, `.`) works normally.
 
 ---
 
@@ -33,6 +34,9 @@ SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised 
 3. Type your message and tap **Send**:
    - Messages are encrypted on your device using your shared `EXPO_PUBLIC_CIPHER_SECRET` before leaving your phone.
    - Both phones sync in real time via Supabase Realtime.
+   - **Ephemeral Presence:** See `online` and `typing...` in the chat header via WebSocket memory (zero database writes).
+   - **Synced Burn Countdown:** Once the recipient reads a burn-on-read message, both sender and receiver see the live `🔥 8s...` countdown before permanent deletion.
+   - **Disguised Alerts:** Incoming messages outside the active chat trigger harmless calculator notifications (e.g., *"Memory register cleared."*) with zero sender or message details.
 
 ---
 

@@ -29,4 +29,4 @@ export interface Message {
   created_at: string;
 }
 
-export type RootScreen = 'calculator' | 'decoy_notes' | 'auth' | 'vault_list' | 'chat';
+export type RootScreen = 'calculator' | 'decoy_notes' | 'auth' | 'vault_list' | 'chat' | 'duress_vault';

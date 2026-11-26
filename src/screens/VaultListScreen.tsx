@@ -17,6 +17,8 @@ import { hashPin } from '../lib/cryptoCodec';
 import { Thread } from '../types/database';
 import { whatsappTheme } from '../theme/whatsappTheme';
 import { PinModal } from '../components/PinModal';
+import { StealthSettingsModal } from '../components/StealthSettingsModal';
+import { DEFAULT_STEALTH_CONFIG, StealthConfig } from '../lib/stealthConfig';
 
 interface VaultListScreenProps {
   onSelectThread: (thread: Thread) => void;
@@ -25,6 +27,9 @@ interface VaultListScreenProps {
   unlockedThreadIds: Set<string>;
   onUnlockThreadId: (id: string) => void;
   onRecordFailedAttempt: () => void;
+  stealthConfig?: StealthConfig;
+  onUpdateStealthConfig?: (cfg: StealthConfig) => void;
+  isDuressMode?: boolean;
 }
 
 export const VaultListScreen: React.FC<VaultListScreenProps> = ({
@@ -34,13 +39,17 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   unlockedThreadIds,
   onUnlockThreadId,
   onRecordFailedAttempt,
+  stealthConfig = DEFAULT_STEALTH_CONFIG,
+  onUpdateStealthConfig,
+  isDuressMode = false,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!isDuressMode);
 
   // Modals & Menus
   const [menuVisible, setMenuVisible] = useState(false);
+  const [settingsModalVisible, setSettingsModalVisible] = useState(false);
   const [newChatModalVisible, setNewChatModalVisible] = useState(false);
   const [newChatTitle, setNewChatTitle] = useState('');
 
@@ -55,6 +64,10 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   const [pinError, setPinError] = useState<string | undefined>(undefined);
 
   const fetchThreads = useCallback(async () => {
+    if (isDuressMode) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const { data, error } = await supabase
       .from('threads')
@@ -67,10 +80,14 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       setThreads(data as Thread[]);
     }
     setLoading(false);
-  }, []);
+  }, [isDuressMode]);
 
-  // Fetch threads and subscribe to Realtime
+  // Fetch threads and subscribe to Realtime (skipped in Duress decoy mode)
   useEffect(() => {
+    if (isDuressMode) {
+      return;
+    }
+
     let mounted = true;
 
     (async () => {
@@ -112,10 +129,15 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       mounted = false;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [isDuressMode]);
 
   const handleCreateThread = async () => {
     if (!newChatTitle.trim()) return;
+    if (isDuressMode) {
+      setNewChatTitle('');
+      setNewChatModalVisible(false);
+      return;
+    }
 
     const { data, error } = await supabase
       .from('threads')
@@ -310,8 +332,8 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
     );
   };
 
-  // Hidden chats logic: revealed strictly when searchQuery === '9999'
-  const isRevealingHidden = searchQuery.trim() === '9999';
+  // Hidden chats logic: revealed strictly when searchQuery matches configured hiddenSearchCode
+  const isRevealingHidden = searchQuery.trim() === stealthConfig.hiddenSearchCode;
   const displayedThreads = threads.filter((t) => {
     if (isRevealingHidden) {
       return t.is_hidden === true;
@@ -360,6 +382,18 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
             <Ionicons name="chatbubble-outline" size={18} color={whatsappTheme.textPrimary} />
             <Text style={styles.menuItemText}>New chat</Text>
           </TouchableOpacity>
+          {!isDuressMode && onUpdateStealthConfig ? (
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                setMenuVisible(false);
+                setSettingsModalVisible(true);
+              }}
+            >
+              <Ionicons name="shield-outline" size={18} color={whatsappTheme.textPrimary} />
+              <Text style={styles.menuItemText}>Stealth settings</Text>
+            </TouchableOpacity>
+          ) : null}
           <TouchableOpacity
             style={styles.menuItem}
             onPress={() => {
@@ -408,7 +442,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       {isRevealingHidden ? (
         <View style={styles.hiddenHeaderBanner}>
           <Ionicons name="eye-off" size={18} color={whatsappTheme.accentGreen} />
-          <Text style={styles.hiddenBannerText}>Hidden Chats Revealed (9999)</Text>
+          <Text style={styles.hiddenBannerText}>
+            Hidden Chats Revealed ({stealthConfig.hiddenSearchCode})
+          </Text>
         </View>
       ) : null}
 
@@ -579,7 +615,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                 color={whatsappTheme.textPrimary}
               />
               <Text style={styles.actionItemText}>
-                {selectedThread?.is_hidden ? 'Unhide Chat' : 'Hide Chat (Reveal with 9999)'}
+                {selectedThread?.is_hidden
+                  ? 'Unhide Chat'
+                  : `Hide Chat (Reveal with ${stealthConfig.hiddenSearchCode})`}
               </Text>
             </TouchableOpacity>
 
@@ -637,6 +675,16 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
           setPinTargetThread(null);
         }}
       />
+
+      {/* Stealth & Security Settings Modal */}
+      {onUpdateStealthConfig && settingsModalVisible ? (
+        <StealthSettingsModal
+          visible={settingsModalVisible}
+          config={stealthConfig}
+          onSave={onUpdateStealthConfig}
+          onClose={() => setSettingsModalVisible(false)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 };
