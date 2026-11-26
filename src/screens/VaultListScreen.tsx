@@ -90,7 +90,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (!error && data) {
+    if (error) {
+      Alert.alert('Database Error', error.message);
+    } else if (data) {
       setThreads(data as Thread[]);
     }
     setLoading(false);

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -201,8 +202,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setSending(false);
 
     if (error) {
-      // Show error if insert failed
-      console.error('Send error:', error);
+      setInputText(text);
+      Alert.alert('Send Error', error.message);
     } else if (data) {
       const newMsg: DecryptedMessage = {
         ...data,

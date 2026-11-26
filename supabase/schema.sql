@@ -32,6 +32,11 @@ exception
   when duplicate_object then null;
 end $$;
 
+-- Grant schema and table privileges to Supabase roles
+grant usage on schema public to anon, authenticated;
+grant all on table public.threads to anon, authenticated;
+grant all on table public.messages to anon, authenticated;
+
 -- Enable Row Level Security
 alter table public.threads enable row level security;
 alter table public.messages enable row level security;
