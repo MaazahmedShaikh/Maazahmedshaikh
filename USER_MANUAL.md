@@ -1,4 +1,4 @@
-# SmartCalc — Private Messenger User Manual
+3# SmartCalc — Private Messenger User Manual
 
 SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised as a working calculator. Zero messages or chat titles are stored on your device disk.
 

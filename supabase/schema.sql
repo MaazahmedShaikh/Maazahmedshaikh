@@ -47,16 +47,16 @@ drop policy if exists "Strict 2-user messages access" on public.messages;
 drop policy if exists "Allow logged in users on threads" on public.threads;
 drop policy if exists "Allow logged in users on messages" on public.messages;
 
--- Allow authenticated users (your private accounts) full access
-create policy "Allow logged in users on threads" on public.threads
+-- Strict 2-user RLS locked exclusively to Maaz & Farnaz UUIDs
+create policy "Strict 2-user threads access" on public.threads
   for all to authenticated
-  using (true)
-  with check (true);
+  using (auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642'))
+  with check (auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642'));
 
-create policy "Allow logged in users on messages" on public.messages
+create policy "Strict 2-user messages access" on public.messages
   for all to authenticated
-  using (true)
-  with check (true);
+  using (auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642'))
+  with check (auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642'));
 
 -- Server-side safety net: purge expired messages or unread messages older than 7 days every minute
 do $$
@@ -64,7 +64,7 @@ begin
   perform cron.schedule(
     'purge-expired-stealth-messages',
     '* * * * *',
-    $$ delete from public.messages where expires_at <= now() or created_at < now() - interval '7 days'; $$
+    $cron$ delete from public.messages where expires_at <= now() or created_at < now() - interval '7 days'; $cron$
   );
 exception
   when others then null;

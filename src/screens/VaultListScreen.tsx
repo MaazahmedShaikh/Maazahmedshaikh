@@ -14,13 +14,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../lib/supabase';
 import { hashPin } from '../lib/cryptoCodec';
-import { Thread } from '../types/database';
+import { ensureDirectThread, getThreadDisplayTitle } from '../lib/directChat';
+import { Thread, User } from '../types/database';
 import { whatsappTheme } from '../theme/whatsappTheme';
 import { PinModal } from '../components/PinModal';
 import { StealthSettingsModal } from '../components/StealthSettingsModal';
 import { DEFAULT_STEALTH_CONFIG, StealthConfig } from '../lib/stealthConfig';
 
 interface VaultListScreenProps {
+  currentUser?: User | null;
   onSelectThread: (thread: Thread) => void;
   onLock: () => void;
   onSignOut: () => void;
@@ -33,6 +35,7 @@ interface VaultListScreenProps {
 }
 
 export const VaultListScreen: React.FC<VaultListScreenProps> = ({
+  currentUser = null,
   onSelectThread,
   onLock,
   onSignOut,
@@ -100,7 +103,14 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       if (error) {
         Alert.alert('Database Error', error.message);
       } else if (data) {
-        setThreads(data as Thread[]);
+        if (data.length === 0 && currentUser) {
+          const direct = await ensureDirectThread(currentUser);
+          if (mounted && direct) {
+            setThreads([direct]);
+          }
+        } else {
+          setThreads(data as Thread[]);
+        }
       }
       setLoading(false);
     })();
@@ -129,7 +139,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [isDuressMode]);
+  }, [isDuressMode, currentUser]);
 
   const handleCreateThread = async () => {
     if (!newChatTitle.trim()) return;
@@ -340,7 +350,8 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
     }
     if (t.is_hidden) return false;
     if (!searchQuery.trim()) return true;
-    return t.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const displayTitle = getThreadDisplayTitle(t, currentUser);
+    return displayTitle.toLowerCase().includes(searchQuery.toLowerCase());
   });
 
   const getTimerLabel = (seconds: number) => {
@@ -456,7 +467,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
         onRefresh={fetchThreads}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => {
-          const safeTitle = (item && typeof item.title === 'string' && item.title.trim()) ? item.title : 'Chat';
+          const safeTitle = getThreadDisplayTitle(item, currentUser);
           const initials = safeTitle
             .split(' ')
             .filter(Boolean)

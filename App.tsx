@@ -218,6 +218,7 @@ export default function App() {
 
         {currentScreen === 'vault_list' && (
           <VaultListScreen
+            currentUser={currentUser}
             onSelectThread={handleSelectThread}
             onLock={handlePanicLock}
             onSignOut={handleSignOut}
@@ -231,6 +232,7 @@ export default function App() {
 
         {currentScreen === 'duress_vault' && (
           <VaultListScreen
+            currentUser={currentUser}
             onSelectThread={() => {}}
             onLock={handlePanicLock}
             onSignOut={handlePanicLock}
@@ -246,6 +248,7 @@ export default function App() {
           <ChatScreen
             thread={activeThread}
             currentUserId={currentUser.id}
+            currentUser={currentUser}
             onBack={() => {
               setActiveThread(null);
               setCurrentScreen('vault_list');

@@ -25,7 +25,8 @@ import {
   encodeMessagePayload,
   ReplyPreview,
 } from '../lib/messagePayload';
-import { Message, Thread } from '../types/database';
+import { Message, Thread, User } from '../types/database';
+import { getThreadDisplayTitle } from '../lib/directChat';
 import { whatsappTheme } from '../theme/whatsappTheme';
 
 const QUICK_EMOJIS = [
@@ -36,6 +37,7 @@ const QUICK_EMOJIS = [
 interface ChatScreenProps {
   thread: Thread;
   currentUserId: string;
+  currentUser?: User | null;
   onBack: () => void;
   onLock: () => void;
 }
@@ -48,6 +50,7 @@ interface DecryptedMessage extends Message {
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   thread,
   currentUserId,
+  currentUser,
   onBack,
   onLock,
 }) => {
@@ -420,7 +423,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     setMessages((prev) => prev.filter((m) => m.id !== msg.id));
   };
 
-  const safeTitle = (thread && typeof thread.title === 'string' && thread.title.trim()) ? thread.title : 'Chat';
+  const safeTitle = getThreadDisplayTitle(thread, currentUser ?? null);
   const initials = safeTitle
     .split(' ')
     .filter(Boolean)
@@ -443,7 +446,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
         <View style={styles.headerInfo}>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            {thread.title}
+            {safeTitle}
           </Text>
           <View style={styles.headerSubRow}>
             {partnerTyping ? (
