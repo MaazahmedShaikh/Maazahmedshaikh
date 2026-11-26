@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const CONFIG_STORAGE_KEY = 'smartcalc_display_prefs_v1';
 
 export type DuressAction = 'empty_vault' | 'wipe';
+export type InactivityTimeout = 0 | 30 | 60 | 120;
 
 export interface StealthConfig {
   vaultCode: string;
@@ -12,6 +13,7 @@ export interface StealthConfig {
   duressAction: DuressAction;
   disguisedNotifications: boolean;
   motionAutoLock: boolean;
+  inactivityTimeoutSeconds: InactivityTimeout;
 }
 
 export const DEFAULT_STEALTH_CONFIG: StealthConfig = {
@@ -22,6 +24,7 @@ export const DEFAULT_STEALTH_CONFIG: StealthConfig = {
   duressAction: 'empty_vault',
   disguisedNotifications: true,
   motionAutoLock: true,
+  inactivityTimeoutSeconds: 60,
 };
 
 /**
@@ -44,6 +47,7 @@ export async function loadStealthConfig(): Promise<StealthConfig> {
           : true,
       motionAutoLock:
         typeof parsed.motionAutoLock === 'boolean' ? parsed.motionAutoLock : true,
+      inactivityTimeoutSeconds: sanitizeInactivity(parsed.inactivityTimeoutSeconds),
     };
   } catch {
     return DEFAULT_STEALTH_CONFIG;
@@ -62,10 +66,16 @@ export async function saveStealthConfig(config: StealthConfig): Promise<StealthC
     duressAction: config.duressAction === 'wipe' ? 'wipe' : 'empty_vault',
     disguisedNotifications: Boolean(config.disguisedNotifications),
     motionAutoLock: Boolean(config.motionAutoLock),
+    inactivityTimeoutSeconds: sanitizeInactivity(config.inactivityTimeoutSeconds),
   };
 
   await AsyncStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(sanitized));
   return sanitized;
+}
+
+function sanitizeInactivity(val: unknown): InactivityTimeout {
+  if (val === 0 || val === 30 || val === 60 || val === 120) return val;
+  return 60;
 }
 
 function sanitizeCode(val: unknown, fallback: string): string {

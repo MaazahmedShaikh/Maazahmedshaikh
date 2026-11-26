@@ -13,6 +13,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import {
   DuressAction,
+  InactivityTimeout,
   saveStealthConfig,
   StealthConfig,
 } from '../lib/stealthConfig';
@@ -41,6 +42,8 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
     config.disguisedNotifications
   );
   const [motionAutoLock, setMotionAutoLock] = useState(config.motionAutoLock);
+  const [inactivityTimeoutSeconds, setInactivityTimeoutSeconds] =
+    useState<InactivityTimeout>(config.inactivityTimeoutSeconds);
 
   const handleSave = async () => {
     const codes = [vaultCode, decoyNotesCode, duressCode];
@@ -64,6 +67,7 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
       duressAction,
       disguisedNotifications,
       motionAutoLock,
+      inactivityTimeoutSeconds,
     });
     onSave(updated);
     onClose();
@@ -190,6 +194,30 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
                 onValueChange={setMotionAutoLock}
                 trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
               />
+            </View>
+
+            <Text style={styles.sectionLabel}>Inactivity Auto-Lock</Text>
+            <View style={styles.duressRow}>
+              {([30, 60, 120, 0] as InactivityTimeout[]).map((secs) => {
+                const label = secs === 0 ? 'Off' : secs === 120 ? '2m' : `${secs}s`;
+                const active = inactivityTimeoutSeconds === secs;
+                return (
+                  <TouchableOpacity
+                    key={secs}
+                    style={[styles.duressOption, active && styles.duressOptionActive]}
+                    onPress={() => setInactivityTimeoutSeconds(secs)}
+                  >
+                    <Text
+                      style={[
+                        styles.duressOptionText,
+                        active && styles.duressOptionTextActive,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
 
             <TouchableOpacity

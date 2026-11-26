@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Text, TouchableOpacity } from 'react-native';
+import { Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -62,13 +62,20 @@ export default function App() {
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [lockoutTimestamp, setLockoutTimestamp] = useState<number | null>(null);
   const [stealthConfig, setStealthConfig] = useState<StealthConfig>(DEFAULT_STEALTH_CONFIG);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const currentScreenRef = useRef<RootScreen>(currentScreen);
   const activeThreadIdRef = useRef<string | null>(null);
+  const disguisedNotifRef = useRef<boolean>(stealthConfig.disguisedNotifications);
+  const inactivityTimerRef = useRef<any>(null);
 
   useEffect(() => {
     currentScreenRef.current = currentScreen;
     activeThreadIdRef.current = activeThread?.id ?? null;
   }, [currentScreen, activeThread?.id]);
+
+  useEffect(() => {
+    disguisedNotifRef.current = stealthConfig.disguisedNotifications;
+  }, [stealthConfig.disguisedNotifications]);
 
   // Check if currently locked out
   const isLockedOut = Boolean(
@@ -77,10 +84,38 @@ export default function App() {
 
   // Global Panic Lock callback: wipes state from memory and returns to decoy calculator
   const handlePanicLock = useCallback(() => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
     setCurrentScreen('calculator');
     setActiveThread(null);
     setUnlockedThreadIds(new Set());
   }, []);
+
+  // Inactivity Auto-Lock timer: resets on every touch or screen change when inside the vault
+  const resetInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+    const timeoutSecs = stealthConfig.inactivityTimeoutSeconds;
+    if (currentScreenRef.current !== 'calculator' && timeoutSecs > 0) {
+      inactivityTimerRef.current = setTimeout(() => {
+        handlePanicLock();
+      }, timeoutSecs * 1000);
+    }
+  }, [stealthConfig.inactivityTimeoutSeconds, handlePanicLock]);
+
+  useEffect(() => {
+    resetInactivityTimer();
+    return () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+        inactivityTimerRef.current = null;
+      }
+    };
+  }, [currentScreen, stealthConfig.inactivityTimeoutSeconds, resetInactivityTimer]);
 
   // Hook privacy guard: screenshots blocked, auto-lock on blur/shake/face-down
   // Only activate accelerometer motion sensors when inside secure screens (avoids calculator vibration triggers)
@@ -108,11 +143,32 @@ export default function App() {
     };
   }, []);
 
-  // Disguised local notification listener when logged in & enabled
+  // Global Realtime listener for live unread badges & disguised local notifications
   useEffect(() => {
-    if (!currentUser || !stealthConfig.disguisedNotifications) return;
+    if (!currentUser) {
+      return;
+    }
 
-    requestNotificationPermission();
+    if (disguisedNotifRef.current) {
+      requestNotificationPermission();
+    }
+
+    let mounted = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('thread_id')
+        .neq('sender_id', currentUser.id)
+        .is('read_at', null)
+        .gt('expires_at', new Date().toISOString());
+
+      if (!mounted || error || !data) return;
+      const counts: Record<string, number> = {};
+      data.forEach((row: { thread_id: string }) => {
+        counts[row.thread_id] = (counts[row.thread_id] || 0) + 1;
+      });
+      setUnreadCounts(counts);
+    })();
 
     const channel = supabase
       .channel('realtime:global_disguised_alerts')
@@ -121,12 +177,19 @@ export default function App() {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const msg = payload.new as { sender_id?: string; thread_id?: string };
-          if (msg.sender_id && msg.sender_id !== currentUser.id) {
+          if (msg.sender_id && msg.thread_id && msg.sender_id !== currentUser.id) {
             const viewingThisChat =
               currentScreenRef.current === 'chat' &&
               activeThreadIdRef.current === msg.thread_id;
             if (!viewingThisChat) {
-              triggerDisguisedNotification();
+              const tId = msg.thread_id;
+              setUnreadCounts((prev) => ({
+                ...prev,
+                [tId]: (prev[tId] || 0) + 1,
+              }));
+              if (disguisedNotifRef.current) {
+                triggerDisguisedNotification();
+              }
             }
           }
         }
@@ -134,9 +197,10 @@ export default function App() {
       .subscribe();
 
     return () => {
+      mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [currentUser, stealthConfig.disguisedNotifications]);
+  }, [currentUser]);
 
   const handleTriggerDuress = async () => {
     if (stealthConfig.duressAction === 'wipe') {
@@ -173,6 +237,12 @@ export default function App() {
   };
 
   const handleSelectThread = (thread: Thread) => {
+    setUnreadCounts((prev) => {
+      if (!prev[thread.id]) return prev;
+      const next = { ...prev };
+      delete next[thread.id];
+      return next;
+    });
     setActiveThread(thread);
     setCurrentScreen('chat');
   };
@@ -205,7 +275,8 @@ export default function App() {
     <SafeAreaProvider>
       <KeyboardProvider>
         <ErrorBoundary>
-        <StatusBar style="light" />
+          <View style={{ flex: 1 }} onTouchStartCapture={resetInactivityTimer}>
+            <StatusBar style="light" />
 
         {currentScreen === 'calculator' && (
           <CalculatorScreen
@@ -233,6 +304,7 @@ export default function App() {
         {currentScreen === 'vault_list' && (
           <VaultListScreen
             currentUser={currentUser}
+            unreadCounts={unreadCounts}
             onSelectThread={handleSelectThread}
             onLock={handlePanicLock}
             onSignOut={handleSignOut}
@@ -263,6 +335,7 @@ export default function App() {
             thread={activeThread}
             currentUserId={currentUser.id}
             currentUser={currentUser}
+            onUpdateThread={setActiveThread}
             onBack={() => {
               setActiveThread(null);
               setCurrentScreen('vault_list');
@@ -270,6 +343,7 @@ export default function App() {
             onLock={handlePanicLock}
           />
         )}
+          </View>
         </ErrorBoundary>
       </KeyboardProvider>
     </SafeAreaProvider>

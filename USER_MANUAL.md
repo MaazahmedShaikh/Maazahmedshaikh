@@ -33,8 +33,10 @@ SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised 
 2. Enter a conversation name (e.g., `Farnaz`) and tap **Create**.
 3. Type your message and tap **Send**:
    - **Encrypted Photos:** Tap the paperclip icon (`📎`) to pick a photo from your library — it is compressed, encrypted client-side, and auto-burns on read with zero disk storage. Tap any photo in chat for full-screen preview.
+   - **Swipe-to-Reply & Long-Press Menu:** Swipe any message bubble to the right to quote-reply instantly (just like WhatsApp), or press and hold to **Reply**, **Copy**, or **Unsend (Delete for Both)**.
+   - **In-Chat Timer Switcher:** Tap the subtitle (`🔥 Burn` / `⏱ 60s timer`) in the chat header to switch disappearing timers (`10s`, `1m`, `1h`, `24h`) or toggle Burn-on-Read right inside the conversation.
    - **Emoji Bar & Scroll Button:** Tap the smiley icon (`😊`) to open the quick emoji bar. When scrolled up in a chat, tap the floating **`↓`** button to jump to the latest message.
-   - **Long-Press Message Menu:** Press and hold any message bubble to **Reply** (quote), **Copy**, or **Unsend (Delete for Both)** immediately.
+   - **Live Unread Badges:** When new messages arrive while you're on the Chats screen, a green unread counter appears automatically on the conversation row.
    - **Ephemeral Presence:** See `online` and `typing...` in the chat header via WebSocket memory (zero database writes).
    - **Synced Burn Countdown:** Once the recipient reads a burn-on-read message, both sender and receiver see the live `🔥 8s...` countdown before permanent deletion.
    - **Disguised Alerts:** Incoming messages outside the active chat trigger harmless calculator notifications (e.g., *"Memory register cleared."*) with zero sender or message details.
@@ -59,7 +61,8 @@ Press and hold any conversation in the **Chats** list to open its options:
 * **Instant Panic Lock:** Any of the following immediately wipes decrypted messages from memory and returns to the calculator:
   1. Tapping the **Lock icon** (`🔒`) at the top right.
   2. Switching apps or pressing Home (app goes to background).
-  3. Holding the phone **face-down for 1 full second** (or a sharp shake) while inside the vault.
+  3. **Inactivity Auto-Lock:** Leaving the vault/chat untouched for your configured timeout (`30s`, `60s`, `2m`, or `Off` in **`⋮` > Stealth settings**).
+  4. Holding the phone **face-down for 1 full second** (or a sharp shake) while inside the vault (toggleable in Stealth settings).
 * **Panic Wipe All Data:** Tap **`⋮` > Panic Wipe All Data** on the Chats screen to permanently erase all threads and messages from Supabase, sign out, and lock the app.
 
 ---

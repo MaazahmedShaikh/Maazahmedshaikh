@@ -23,6 +23,7 @@ import { DEFAULT_STEALTH_CONFIG, StealthConfig } from '../lib/stealthConfig';
 
 interface VaultListScreenProps {
   currentUser?: User | null;
+  unreadCounts?: Record<string, number>;
   onSelectThread: (thread: Thread) => void;
   onLock: () => void;
   onSignOut: () => void;
@@ -36,6 +37,7 @@ interface VaultListScreenProps {
 
 export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   currentUser = null,
+  unreadCounts = {},
   onSelectThread,
   onLock,
   onSignOut,
@@ -476,6 +478,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
             .toUpperCase()
             .slice(0, 2) || 'C';
 
+          const unreadCount = unreadCounts[item.id] || 0;
           const safeTime = item.created_at
             ? new Date(item.created_at).toLocaleTimeString([], {
               hour: '2-digit',
@@ -525,21 +528,46 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                   ) : null}
                 </View>
                 <View style={styles.lastMessageRow}>
-                  <Ionicons
-                    name="checkmark-done"
-                    size={16}
-                    color={whatsappTheme.tickBlue}
-                    style={{ marginRight: 4 }}
-                  />
-                  <Text style={styles.lastMessageText} numberOfLines={1}>
-                    {item.burn_on_read ? '🔥 Burn after reading' : 'Disappearing chat'}
-                  </Text>
+                  {unreadCount > 0 ? (
+                    <Text
+                      style={[styles.lastMessageText, { color: whatsappTheme.accentGreen, fontWeight: '600' }]}
+                      numberOfLines={1}
+                    >
+                      New encrypted message
+                    </Text>
+                  ) : (
+                    <>
+                      <Ionicons
+                        name="checkmark-done"
+                        size={16}
+                        color={whatsappTheme.tickBlue}
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text style={styles.lastMessageText} numberOfLines={1}>
+                        {item.burn_on_read ? '🔥 Burn after reading' : 'Disappearing chat'}
+                      </Text>
+                    </>
+                  )}
                 </View>
               </View>
 
-              {/* Time */}
+              {/* Time & Unread Badge */}
               <View style={styles.threadRight}>
-                <Text style={styles.timeText}>{safeTime}</Text>
+                <Text
+                  style={[
+                    styles.timeText,
+                    unreadCount > 0 && { color: whatsappTheme.accentGreen, fontWeight: '600' },
+                  ]}
+                >
+                  {safeTime}
+                </Text>
+                {unreadCount > 0 ? (
+                  <View style={styles.unreadBadge}>
+                    <Text style={styles.unreadBadgeText}>
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             </TouchableOpacity>
           );
@@ -860,6 +888,21 @@ const styles = StyleSheet.create({
   timeText: {
     color: whatsappTheme.textSecondary,
     fontSize: 12,
+  },
+  unreadBadge: {
+    marginTop: 5,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: whatsappTheme.accentGreen,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+  },
+  unreadBadgeText: {
+    color: '#0B141A',
+    fontSize: 11,
+    fontWeight: '700',
   },
   emptyContainer: {
     alignItems: 'center',

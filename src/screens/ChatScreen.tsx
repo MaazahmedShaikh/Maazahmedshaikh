@@ -1,12 +1,15 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
   FlatList,
   Image,
   Keyboard,
   Modal,
+  PanResponder,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -34,10 +37,18 @@ const QUICK_EMOJIS = [
   '🙏', '🔥', '❤️', '👍', '🎉', '👀', '💯', '✨',
 ];
 
+const TIMER_OPTIONS = [
+  { label: '10s', seconds: 10 },
+  { label: '1m', seconds: 60 },
+  { label: '1h', seconds: 3600 },
+  { label: '24h', seconds: 86400 },
+];
+
 interface ChatScreenProps {
   thread: Thread;
   currentUserId: string;
   currentUser?: User | null;
+  onUpdateThread?: (updated: Thread) => void;
   onBack: () => void;
   onLock: () => void;
 }
@@ -48,10 +59,70 @@ interface DecryptedMessage extends Message {
   isOptimistic?: boolean;
 }
 
+const SwipeableMessageBubble: React.FC<{
+  message: DecryptedMessage;
+  onSwipeReply: (msg: DecryptedMessage) => void;
+  children: React.ReactNode;
+}> = ({ message, onSwipeReply, children }) => {
+  const [translateX] = useState(() => new Animated.Value(0));
+
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_evt, gesture) =>
+          gesture.dx > 12 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+        onPanResponderMove: (_evt, gesture) => {
+          if (gesture.dx <= 0) return;
+          translateX.setValue(Math.min(68, gesture.dx));
+        },
+        onPanResponderRelease: (_evt, gesture) => {
+          const shouldReply = gesture.dx >= 48;
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+            bounciness: 6,
+          }).start();
+          if (shouldReply) {
+            try {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            } catch {}
+            onSwipeReply(message);
+          }
+        },
+        onPanResponderTerminate: () => {
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+          }).start();
+        },
+      }),
+    [message, onSwipeReply, translateX]
+  );
+
+  const iconOpacity = translateX.interpolate({
+    inputRange: [0, 24, 52],
+    outputRange: [0, 0.5, 1],
+    extrapolate: 'clamp',
+  });
+
+  return (
+    <View style={{ position: 'relative' }} {...panResponder.panHandlers}>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.swipeReplyHint, { opacity: iconOpacity }]}
+      >
+        <Ionicons name="arrow-undo" size={18} color={whatsappTheme.accentGreen} />
+      </Animated.View>
+      <Animated.View style={{ transform: [{ translateX }] }}>{children}</Animated.View>
+    </View>
+  );
+};
+
 export const ChatScreen: React.FC<ChatScreenProps> = ({
   thread,
   currentUserId,
   currentUser,
+  onUpdateThread,
   onBack,
   onLock,
 }) => {
@@ -65,6 +136,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const [emojiVisible, setEmojiVisible] = useState(false);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const [timerModalVisible, setTimerModalVisible] = useState(false);
 
   const flatListRef = useRef<FlatList>(null);
   const channelRef = useRef<any>(null);
@@ -330,6 +402,20 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'threads',
+          filter: `id=eq.${thread.id}`,
+        },
+        (payload) => {
+          if (payload.new && onUpdateThread) {
+            onUpdateThread(payload.new as Thread);
+          }
+        }
+      )
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           await channel.track({ online: true, typing: false });
@@ -344,7 +430,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       channelRef.current = null;
       supabase.removeChannel(channel);
     };
-  }, [thread.id, thread.burn_on_read, currentUserId, handleIncomingBurn, startBurnCountdown]);
+  }, [thread.id, thread.burn_on_read, currentUserId, handleIncomingBurn, startBurnCountdown, onUpdateThread]);
 
   // 1-second interval to purge expired messages from memory and clean up expired rows
   useEffect(() => {
@@ -520,7 +606,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
   };
 
-  const handleReplyMessage = (msg: DecryptedMessage) => {
+  const handleReplyMessage = useCallback((msg: DecryptedMessage) => {
     const parsed = decodeMessagePayload(msg.content);
     const preview = parsed.imageBase64
       ? parsed.text
@@ -529,7 +615,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       : parsed.text || '';
     setReplyTo({ id: msg.id, preview: preview.slice(0, 80) });
     setSelectedMsg(null);
-  };
+  }, []);
 
   const handleUnsendMessage = async (msg: DecryptedMessage) => {
     setSelectedMsg(null);
@@ -544,6 +630,32 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       payload: { id: msg.id },
     });
     setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+  };
+
+  const handleUpdateTimer = async (patch: { disappear_seconds?: number; burn_on_read?: boolean }) => {
+    const nextThread: Thread = {
+      ...thread,
+      ...patch,
+    };
+    onUpdateThread?.(nextThread);
+
+    const { error } = await supabase
+      .from('threads')
+      .update(patch)
+      .eq('id', thread.id);
+
+    if (error) {
+      onUpdateThread?.(thread);
+      Alert.alert('Timer Update Failed', error.message);
+    }
+  };
+
+  const formatTimerLabel = (seconds: number) => {
+    if (seconds === 10) return '10s';
+    if (seconds === 60) return '1m';
+    if (seconds === 3600) return '1h';
+    if (seconds === 86400) return '24h';
+    return `${seconds}s`;
   };
 
   const safeTitle = getThreadDisplayTitle(thread, currentUser ?? null);
@@ -567,7 +679,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           <Text style={styles.headerAvatarText}>{initials || 'C'}</Text>
         </View>
 
-        <View style={styles.headerInfo}>
+        <TouchableOpacity
+          style={styles.headerInfo}
+          activeOpacity={0.7}
+          onPress={() => setTimerModalVisible(true)}
+        >
           <Text style={styles.headerTitle} numberOfLines={1}>
             {safeTitle}
           </Text>
@@ -577,15 +693,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 typing...
               </Text>
             ) : (
-              <Text style={styles.headerSubtitle}>
-                {partnerOnline ? 'online • ' : ''}
-                {thread.burn_on_read
-                  ? '🔥 Burn on read'
-                  : `⏱ ${thread.disappear_seconds}s timer`}
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text style={styles.headerSubtitle}>
+                  {partnerOnline ? 'online • ' : ''}
+                  {thread.burn_on_read
+                    ? `🔥 Burn (${formatTimerLabel(thread.disappear_seconds || 60)})`
+                    : `⏱ ${formatTimerLabel(thread.disappear_seconds || 60)} timer`}
+                </Text>
+                <Ionicons name="chevron-down" size={12} color={whatsappTheme.textSecondary} />
+              </View>
             )}
           </View>
-        </View>
+        </TouchableOpacity>
 
         <View style={styles.headerRight}>
           <TouchableOpacity style={styles.headerIconBtn} onPress={onLock}>
@@ -629,78 +748,80 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             });
 
             return (
-              <View
-                style={[
-                  styles.bubbleContainer,
-                  isOutgoing ? styles.outgoingContainer : styles.incomingContainer,
-                ]}
-              >
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  onLongPress={() => {
-                    try {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    } catch {}
-                    setSelectedMsg(item);
-                  }}
+              <SwipeableMessageBubble message={item} onSwipeReply={handleReplyMessage}>
+                <View
                   style={[
-                    styles.bubble,
-                    isOutgoing ? styles.outgoingBubble : styles.incomingBubble,
+                    styles.bubbleContainer,
+                    isOutgoing ? styles.outgoingContainer : styles.incomingContainer,
                   ]}
                 >
-                  {parsed.replyTo ? (
-                    <View style={styles.replyQuoteBox}>
-                      <Text style={styles.replyQuoteText} numberOfLines={2}>
-                        {parsed.replyTo.preview}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {parsed.imageBase64 ? (
-                    <TouchableOpacity
-                      activeOpacity={0.9}
-                      onPress={() =>
-                        setPreviewImageUri(`data:image/jpeg;base64,${parsed.imageBase64}`)
-                      }
-                      onLongPress={() => setSelectedMsg(item)}
-                    >
-                      <Image
-                        source={{ uri: `data:image/jpeg;base64,${parsed.imageBase64}` }}
-                        style={styles.bubbleImage}
-                        resizeMode="cover"
-                      />
-                    </TouchableOpacity>
-                  ) : null}
-
-                  {parsed.text ? (
-                    <Text style={styles.messageText}>{parsed.text}</Text>
-                  ) : null}
-
-                  <View style={styles.metaRow}>
-                    {item.isBurning && item.remainingSeconds !== undefined ? (
-                      <View style={styles.burnBadge}>
-                        <Ionicons name="flame" size={12} color="#FFA500" />
-                        <Text style={styles.burnBadgeText}>
-                          {item.remainingSeconds}s
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onLongPress={() => {
+                      try {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      } catch {}
+                      setSelectedMsg(item);
+                    }}
+                    style={[
+                      styles.bubble,
+                      isOutgoing ? styles.outgoingBubble : styles.incomingBubble,
+                    ]}
+                  >
+                    {parsed.replyTo ? (
+                      <View style={styles.replyQuoteBox}>
+                        <Text style={styles.replyQuoteText} numberOfLines={2}>
+                          {parsed.replyTo.preview}
                         </Text>
                       </View>
-                    ) : thread.burn_on_read ? (
-                      <Text style={styles.burnHint}>🔥</Text>
                     ) : null}
 
-                    <Text style={styles.timeMeta}>{timeStr}</Text>
-
-                    {isOutgoing ? (
-                      <Ionicons
-                        name={item.isOptimistic ? 'time-outline' : 'checkmark-done'}
-                        size={15}
-                        color={item.read_at ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
-                        style={{ marginLeft: 3 }}
-                      />
+                    {parsed.imageBase64 ? (
+                      <TouchableOpacity
+                        activeOpacity={0.9}
+                        onPress={() =>
+                          setPreviewImageUri(`data:image/jpeg;base64,${parsed.imageBase64}`)
+                        }
+                        onLongPress={() => setSelectedMsg(item)}
+                      >
+                        <Image
+                          source={{ uri: `data:image/jpeg;base64,${parsed.imageBase64}` }}
+                          style={styles.bubbleImage}
+                          resizeMode="cover"
+                        />
+                      </TouchableOpacity>
                     ) : null}
-                  </View>
-                </TouchableOpacity>
-              </View>
+
+                    {parsed.text ? (
+                      <Text style={styles.messageText}>{parsed.text}</Text>
+                    ) : null}
+
+                    <View style={styles.metaRow}>
+                      {item.isBurning && item.remainingSeconds !== undefined ? (
+                        <View style={styles.burnBadge}>
+                          <Ionicons name="flame" size={12} color="#FFA500" />
+                          <Text style={styles.burnBadgeText}>
+                            {item.remainingSeconds}s
+                          </Text>
+                        </View>
+                      ) : thread.burn_on_read ? (
+                        <Text style={styles.burnHint}>🔥</Text>
+                      ) : null}
+
+                      <Text style={styles.timeMeta}>{timeStr}</Text>
+
+                      {isOutgoing ? (
+                        <Ionicons
+                          name={item.isOptimistic ? 'time-outline' : 'checkmark-done'}
+                          size={15}
+                          color={item.read_at ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
+                          style={{ marginLeft: 3 }}
+                        />
+                      ) : null}
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              </SwipeableMessageBubble>
             );
           }}
           ListEmptyComponent={
@@ -852,6 +973,54 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                 </TouchableOpacity>
               </>
             ) : null}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* In-Chat Timer & Burn Switcher Modal */}
+      <Modal
+        visible={timerModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTimerModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setTimerModalVisible(false)}
+        >
+          <View style={styles.timerCard}>
+            <Text style={styles.timerTitle}>Disappearing Message Timer</Text>
+            <View style={styles.timerPillsRow}>
+              {TIMER_OPTIONS.map((opt) => {
+                const active = (thread.disappear_seconds || 60) === opt.seconds;
+                return (
+                  <TouchableOpacity
+                    key={opt.label}
+                    style={[styles.timerPill, active && styles.timerPillActive]}
+                    onPress={() => handleUpdateTimer({ disappear_seconds: opt.seconds })}
+                  >
+                    <Text style={[styles.timerPillText, active && styles.timerPillTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.burnToggleRow}>
+              <View style={{ flex: 1, paddingRight: 10 }}>
+                <Text style={styles.actionText}>Burn on Read (8s)</Text>
+                <Text style={{ color: whatsappTheme.textSecondary, fontSize: 12, marginTop: 2 }}>
+                  Delete message 8 seconds after recipient reads it.
+                </Text>
+              </View>
+              <Switch
+                value={thread.burn_on_read}
+                onValueChange={(val) => handleUpdateTimer({ burn_on_read: val })}
+                trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
+              />
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1177,6 +1346,61 @@ const styles = StyleSheet.create({
   imagePreviewFull: {
     width: '100%',
     height: '80%',
+  },
+  swipeReplyHint: {
+    position: 'absolute',
+    left: 10,
+    top: '50%',
+    marginTop: -12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(31, 44, 52, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  timerCard: {
+    width: '88%',
+    backgroundColor: whatsappTheme.bgHeader,
+    borderRadius: 16,
+    padding: 20,
+  },
+  timerTitle: {
+    color: whatsappTheme.textPrimary,
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 14,
+  },
+  timerPillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 18,
+  },
+  timerPill: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: whatsappTheme.bgPrimary,
+    alignItems: 'center',
+  },
+  timerPillActive: {
+    backgroundColor: whatsappTheme.accentGreen,
+  },
+  timerPillText: {
+    color: whatsappTheme.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  timerPillTextActive: {
+    color: '#0B141A',
+  },
+  burnToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: whatsappTheme.divider,
   },
 });
 
