@@ -1,7 +1,7 @@
 -- Create extensions
 create extension if not exists "uuid-ossp";
 create extension if not exists pg_cron;
-create extension if not exists pg_net with schema extensions;
+create extension if not exists pg_net;
 
 -- Create threads table
 create table if not exists public.threads (
@@ -128,61 +128,71 @@ create or replace function public.dispatch_disguised_push()
 returns trigger
 language plpgsql
 security definer
-set search_path = public, extensions
-as $$
+set search_path = public, net, extensions
+as $fn$
 declare
-  push_payload jsonb;
-  ntfy_row record;
-  picked_body text;
-  tips text[] := array[
+  v_push_payload jsonb;
+  v_ntfy_row record;
+  v_picked_body text;
+  v_tips text[] := array[
     'Tip: Rotate or tap +/- for quick sign conversion.',
     'Memory register cleared.',
     'Precision calculation engine ready.',
     'Daily calculation summary updated.'
   ];
 begin
-  picked_body := tips[1 + floor(random() * array_length(tips, 1))::int];
+  v_picked_body := v_tips[1 + floor(random() * array_length(v_tips, 1))::int];
 
   -- 1. Send to native Expo Push devices (Android FCM / paid APNs)
-  select jsonb_agg(
-    jsonb_build_object(
-      'to', t.expo_push_token,
-      'title', 'SmartCalc',
-      'body', picked_body,
-      'sound', 'default',
-      'priority', 'high'
-    ) || case
-      when t.platform = 'android' then jsonb_build_object('channelId', 'smartcalc_tips')
-      else '{}'::jsonb
-    end
-  )
-  into push_payload
-  from public.user_push_tokens t
-  where t.user_id <> new.sender_id
-    and t.platform <> 'ntfy';
+  v_push_payload := (
+    select jsonb_agg(
+      case
+        when t.platform = 'android' then
+          jsonb_build_object(
+            'to', t.expo_push_token,
+            'title', 'SmartCalc',
+            'body', v_picked_body,
+            'sound', 'default',
+            'priority', 'high',
+            'channelId', 'smartcalc_tips'
+          )
+        else
+          jsonb_build_object(
+            'to', t.expo_push_token,
+            'title', 'SmartCalc',
+            'body', v_picked_body,
+            'sound', 'default',
+            'priority', 'high'
+          )
+      end
+    )
+    from public.user_push_tokens as t
+    where t.user_id <> new.sender_id
+      and t.platform <> 'ntfy'
+  );
 
-  if push_payload is not null and jsonb_array_length(push_payload) > 0 then
+  if v_push_payload is not null and jsonb_array_length(v_push_payload) > 0 then
     perform net.http_post(
       url := 'https://exp.host/--/api/v2/push/send',
       headers := '{"Content-Type": "application/json", "Accept": "application/json"}'::jsonb,
-      body := push_payload
+      body := v_push_payload
     );
   end if;
 
   -- 2. Send to optional private ntfy.sh topics (free closed-app iOS/Android notifications)
-  for ntfy_row in
-    select expo_push_token
-    from public.user_push_tokens
-    where user_id <> new.sender_id
-      and platform = 'ntfy'
+  for v_ntfy_row in
+    select t.expo_push_token
+    from public.user_push_tokens as t
+    where t.user_id <> new.sender_id
+      and t.platform = 'ntfy'
   loop
     perform net.http_post(
       url := 'https://ntfy.sh',
       headers := '{"Content-Type": "application/json"}'::jsonb,
       body := jsonb_build_object(
-        'topic', ntfy_row.expo_push_token,
+        'topic', v_ntfy_row.expo_push_token,
         'title', 'SmartCalc',
-        'message', picked_body,
+        'message', v_picked_body,
         'priority', 4
       )
     );
@@ -193,7 +203,7 @@ exception
   when others then
     return new;
 end;
-$$;
+$fn$;
 
 drop trigger if exists tr_dispatch_disguised_push on public.messages;
 create trigger tr_dispatch_disguised_push
