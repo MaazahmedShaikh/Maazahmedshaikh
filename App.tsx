@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, AppState, AppStateStatus, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
@@ -10,9 +10,11 @@ import {
   StealthConfig,
 } from './src/lib/stealthConfig';
 import {
+  registerExpoPushToken,
   requestNotificationPermission,
   triggerDisguisedNotification,
 } from './src/lib/notifications';
+import { clearMemoryCache } from './src/lib/memoryCache';
 import { RootScreen, Thread, User } from './src/types/database';
 import { usePrivacyGuard } from './src/hooks/usePrivacyGuard';
 import { CalculatorScreen } from './src/screens/CalculatorScreen';
@@ -52,6 +54,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 }
 
 export default function App() {
+  const [booting, setBooting] = useState(true);
   const [currentScreen, setCurrentScreen] = useState<RootScreen>('calculator');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeThread, setActiveThread] = useState<Thread | null>(null);
@@ -63,10 +66,12 @@ export default function App() {
   const [stealthConfig, setStealthConfig] = useState<StealthConfig>(DEFAULT_STEALTH_CONFIG);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [suspendAutoLock, setSuspendAutoLock] = useState(false);
+  const [privacyMasked, setPrivacyMasked] = useState(false);
   const currentScreenRef = useRef<RootScreen>(currentScreen);
   const activeThreadIdRef = useRef<string | null>(null);
   const disguisedNotifRef = useRef<boolean>(stealthConfig.disguisedNotifications);
   const suspendAutoLockRef = useRef<boolean>(false);
+  const knownUnreadIdsRef = useRef<Set<string>>(new Set());
   const inactivityTimerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -87,12 +92,13 @@ export default function App() {
     lockoutTimestamp && Date.now() < lockoutTimestamp
   );
 
-  // Global Panic Lock callback: wipes state from memory and returns to decoy calculator
+  // Global Panic Lock callback: wipes RAM cache & state and returns to decoy calculator
   const handlePanicLock = useCallback(() => {
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
       inactivityTimerRef.current = null;
     }
+    clearMemoryCache();
     setSuspendAutoLock(false);
     setCurrentScreen('calculator');
     setActiveThread(null);
@@ -123,59 +129,89 @@ export default function App() {
     };
   }, [currentScreen, stealthConfig.inactivityTimeoutSeconds, suspendAutoLock, resetInactivityTimer]);
 
-  // Hook privacy guard: screenshots blocked, auto-lock on blur/shake/face-down
-  // Only activate accelerometer motion sensors when inside secure screens (avoids calculator vibration triggers)
+  // Hook privacy guard: blocks screenshots, shows instant Calculator mask on 'inactive', hard-locks on 'background'
   const isSecureScreen = currentScreen !== 'calculator';
   usePrivacyGuard({
     onPanicLock: handlePanicLock,
+    onBackgroundStateChange: setPrivacyMasked,
     isActiveScreenSecure: isSecureScreen,
     motionAutoLock: stealthConfig.motionAutoLock,
     suspendAutoLock,
   });
 
-  // Check Supabase Auth state & load StealthConfig on mount
+  // Initialize Supabase Auth & StealthConfig safely before rendering
   useEffect(() => {
-    loadStealthConfig().then(setStealthConfig);
-
-    supabase.auth.getSession().then((res: any) => {
-      setCurrentUser(res?.data?.session?.user ?? null);
-    });
+    let mounted = true;
+    Promise.all([loadStealthConfig(), supabase.auth.getSession()])
+      .then(([cfg, res]) => {
+        if (!mounted) return;
+        setStealthConfig(cfg);
+        setCurrentUser((res as any)?.data?.session?.user ?? null);
+      })
+      .finally(() => {
+        if (mounted) {
+          setBooting(false);
+        }
+      });
 
     const res = supabase.auth.onAuthStateChange((_event: any, session: any) => {
       setCurrentUser(session?.user ?? null);
     });
 
     return () => {
+      mounted = false;
       res?.data?.subscription?.unsubscribe?.();
     };
   }, []);
 
-  // Global Realtime listener for live unread badges & disguised local notifications
+  // Global Realtime listener, push token registration & foreground reconnect sync
   useEffect(() => {
     if (!currentUser) {
+      knownUnreadIdsRef.current.clear();
       return;
     }
 
     if (disguisedNotifRef.current) {
       requestNotificationPermission();
+      registerExpoPushToken(currentUser.id);
     }
 
     let mounted = true;
-    (async () => {
+
+    const syncUnreadMessages = async (notifyOnNew: boolean) => {
       const { data, error } = await supabase
         .from('messages')
-        .select('thread_id')
+        .select('id, thread_id')
         .neq('sender_id', currentUser.id)
         .is('read_at', null)
-        .gt('expires_at', new Date().toISOString());
+        .gt('expires_at', new Date().toISOString())
+        .limit(100);
 
       if (!mounted || error || !data) return;
+
       const counts: Record<string, number> = {};
-      data.forEach((row: { thread_id: string }) => {
+      let hasBrandNew = false;
+
+      (data as { id: string; thread_id: string }[]).forEach((row) => {
         counts[row.thread_id] = (counts[row.thread_id] || 0) + 1;
+        const viewingThisChat =
+          currentScreenRef.current === 'chat' && activeThreadIdRef.current === row.thread_id;
+        if (!knownUnreadIdsRef.current.has(row.id)) {
+          knownUnreadIdsRef.current.add(row.id);
+          if (notifyOnNew && !viewingThisChat) {
+            hasBrandNew = true;
+          }
+        }
       });
+
       setUnreadCounts(counts);
-    })();
+
+      if (hasBrandNew && disguisedNotifRef.current) {
+        triggerDisguisedNotification();
+      }
+    };
+
+    syncUnreadMessages(false);
 
     const channel = supabase
       .channel('realtime:global_disguised_alerts')
@@ -183,8 +219,11 @@ export default function App() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
-          const msg = payload.new as { sender_id?: string; thread_id?: string };
+          const msg = payload.new as { id?: string; sender_id?: string; thread_id?: string };
           if (msg.sender_id && msg.thread_id && msg.sender_id !== currentUser.id) {
+            if (msg.id) {
+              knownUnreadIdsRef.current.add(msg.id);
+            }
             const viewingThisChat =
               currentScreenRef.current === 'chat' &&
               activeThreadIdRef.current === msg.thread_id;
@@ -203,11 +242,22 @@ export default function App() {
       )
       .subscribe();
 
+    // Reconnect Realtime WebSocket cleanly when resuming from OS sleep/background
+    const appStateSub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') {
+        try {
+          (supabase.realtime as any)?.connect?.();
+        } catch {}
+        syncUnreadMessages(true);
+      }
+    });
+
     return () => {
       mounted = false;
+      appStateSub.remove();
       supabase.removeChannel(channel);
     };
-  }, [currentUser]);
+  }, [currentUser, stealthConfig.disguisedNotifications]);
 
   const handleTriggerDuress = async () => {
     if (stealthConfig.duressAction === 'wipe') {
@@ -220,6 +270,7 @@ export default function App() {
         // Ignore errors under duress and still show decoy vault
       }
     }
+    clearMemoryCache();
     setActiveThread(null);
     setUnlockedThreadIds(new Set());
     setCurrentScreen('duress_vault');
@@ -273,10 +324,23 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    clearMemoryCache();
     await supabase.auth.signOut();
     setCurrentUser(null);
     handlePanicLock();
   };
+
+  if (booting) {
+    return (
+      <SafeAreaProvider>
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#000000', justifyContent: 'center', alignItems: 'center', gap: 14 }}>
+          <StatusBar style="light" />
+          <ActivityIndicator size="large" color="#00A884" />
+          <Text style={{ color: '#8696A0', fontSize: 14, fontWeight: '600' }}>SmartCalc</Text>
+        </SafeAreaView>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>
@@ -349,6 +413,21 @@ export default function App() {
             }}
             onLock={handlePanicLock}
           />
+        )}
+
+        {/* Instant Switcher Mask: guarantees minimized previews never show chat/vault UI */}
+        {privacyMasked && currentScreen !== 'calculator' && (
+          <View style={[StyleSheet.absoluteFill, { zIndex: 9999 }]} pointerEvents="none">
+            <CalculatorScreen
+              onUnlockVault={() => {}}
+              onOpenDecoyNotes={() => {}}
+              onTriggerDuress={() => {}}
+              vaultCode={stealthConfig.vaultCode}
+              decoyNotesCode={stealthConfig.decoyNotesCode}
+              duressCode={stealthConfig.duressCode}
+              isLockedOut={isLockedOut}
+            />
+          </View>
         )}
           </View>
         </ErrorBoundary>

@@ -29,7 +29,14 @@
     },
     "plugins": [
       "./plugins/withSecretDialer.js",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/android-icon-monochrome.png",
+          "color": "#00A884"
+        }
+      ]
     ],
     "web": {
       "favicon": "./assets/favicon.png"

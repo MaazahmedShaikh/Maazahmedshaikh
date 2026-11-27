@@ -13,9 +13,17 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../lib/supabase';
-import { hashPin } from '../lib/cryptoCodec';
+import { decryptMessage, hashPin } from '../lib/cryptoCodec';
 import { ensureDirectThread, getThreadDisplayTitle } from '../lib/directChat';
-import { Thread, User } from '../types/database';
+import {
+  getCachedThreadActivity,
+  getCachedPlaintext,
+  setCachedPlaintext,
+  setCachedThreadActivity,
+  setCachedThreadMessages,
+  ThreadActivitySummary,
+} from '../lib/memoryCache';
+import { Message, Thread, User } from '../types/database';
 import { whatsappTheme } from '../theme/whatsappTheme';
 import { PinModal } from '../components/PinModal';
 import { StealthSettingsModal } from '../components/StealthSettingsModal';
@@ -49,6 +57,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   isDuressMode = false,
 }) => {
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [threadActivities, setThreadActivities] = useState<Record<string, ThreadActivitySummary>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(!isDuressMode);
 
@@ -68,6 +77,80 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   const [pinMode, setPinMode] = useState<'verify' | 'set'>('verify');
   const [pinError, setPinError] = useState<string | undefined>(undefined);
 
+  const loadThreadSummariesAndPrefetch = useCallback(
+    async (threadList: Thread[], isMounted?: () => boolean) => {
+      if (isDuressMode || threadList.length === 0) return;
+
+      const nowIso = new Date().toISOString();
+      const { data: recentMeta } = await supabase
+        .from('messages')
+        .select('id, thread_id, sender_id, created_at, read_at')
+        .gt('expires_at', nowIso)
+        .order('created_at', { ascending: false })
+        .limit(40);
+
+      if (isMounted && !isMounted()) return;
+
+      const nextActivities: Record<string, ThreadActivitySummary> = {};
+      threadList.forEach((t) => {
+        const cached = getCachedThreadActivity(t.id);
+        if (cached) {
+          nextActivities[t.id] = cached;
+        }
+      });
+
+      if (recentMeta && Array.isArray(recentMeta)) {
+        for (const row of recentMeta as {
+          id: string;
+          thread_id: string;
+          sender_id: string;
+          created_at: string;
+          read_at: string | null;
+        }[]) {
+          if (!nextActivities[row.thread_id]) {
+            const summary: ThreadActivitySummary = {
+              lastMessageAt: row.created_at,
+              lastSenderId: row.sender_id,
+              lastReadAt: row.read_at,
+            };
+            nextActivities[row.thread_id] = summary;
+            setCachedThreadActivity(row.thread_id, summary);
+          }
+        }
+      }
+      setThreadActivities(nextActivities);
+
+      // Prefetch latest messages for unlocked (non-PIN or already unlocked) threads into volatile RAM
+      const unlockedList = threadList.filter((t) => !t.pin_hash || unlockedThreadIds.has(t.id));
+      for (const t of unlockedList.slice(0, 3)) {
+        const { data: msgRows } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('thread_id', t.id)
+          .gt('expires_at', nowIso)
+          .order('created_at', { ascending: false })
+          .limit(30);
+
+        if (isMounted && !isMounted()) return;
+        if (msgRows && msgRows.length > 0) {
+          const ordered = (msgRows as Message[]).slice().reverse();
+          const decrypted = await Promise.all(
+            ordered.map(async (m) => {
+              const cached = getCachedPlaintext(m.id);
+              const plain = cached !== undefined ? cached : await decryptMessage(m.content);
+              setCachedPlaintext(m.id, plain);
+              return { ...m, content: plain };
+            })
+          );
+          if (!isMounted || isMounted()) {
+            setCachedThreadMessages(t.id, decrypted);
+          }
+        }
+      }
+    },
+    [isDuressMode, unlockedThreadIds]
+  );
+
   const fetchThreads = useCallback(async () => {
     if (isDuressMode) {
       setLoading(false);
@@ -82,10 +165,12 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
     if (error) {
       Alert.alert('Database Error', error.message);
     } else if (data) {
-      setThreads(data as Thread[]);
+      const list = data as Thread[];
+      setThreads(list);
+      loadThreadSummariesAndPrefetch(list);
     }
     setLoading(false);
-  }, [isDuressMode]);
+  }, [isDuressMode, loadThreadSummariesAndPrefetch]);
 
   // Fetch threads and subscribe to Realtime (skipped in Duress decoy mode)
   useEffect(() => {
@@ -94,6 +179,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
     }
 
     let mounted = true;
+    const isMounted = () => mounted;
 
     (async () => {
       const { data, error } = await supabase
@@ -109,9 +195,12 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
           const direct = await ensureDirectThread(currentUser);
           if (mounted && direct) {
             setThreads([direct]);
+            loadThreadSummariesAndPrefetch([direct], isMounted);
           }
         } else {
-          setThreads(data as Thread[]);
+          const list = data as Thread[];
+          setThreads(list);
+          loadThreadSummariesAndPrefetch(list, isMounted);
         }
       }
       setLoading(false);
@@ -141,7 +230,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
       mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [isDuressMode, currentUser]);
+  }, [isDuressMode, currentUser, loadThreadSummariesAndPrefetch]);
 
   const handleCreateThread = async () => {
     if (!newChatTitle.trim()) return;
@@ -461,128 +550,178 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
         </View>
       ) : null}
 
-      {/* Threads List */}
-      <FlatList
-        data={displayedThreads}
-        keyExtractor={(item) => item.id}
-        refreshing={loading}
-        onRefresh={fetchThreads}
-        contentContainerStyle={styles.listContent}
-        renderItem={({ item }) => {
-          const safeTitle = getThreadDisplayTitle(item, currentUser);
-          const initials = safeTitle
-            .split(' ')
-            .filter(Boolean)
-            .map((w) => w[0])
-            .join('')
-            .toUpperCase()
-            .slice(0, 2) || 'C';
-
-          const unreadCount = unreadCounts[item.id] || 0;
-          const safeTime = item.created_at
-            ? new Date(item.created_at).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-            : '';
-
-          return (
-            <TouchableOpacity
-              style={styles.threadRow}
-              activeOpacity={0.7}
-              onPress={() => handleThreadPress(item)}
-              onLongPress={() => handleLongPressThread(item)}
-            >
-              {/* Avatar */}
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initials || 'C'}</Text>
-                {/* Timer badge */}
-                <View style={styles.timerBadge}>
-                  <Text style={styles.timerBadgeText}>
-                    {getTimerLabel(item.disappear_seconds || 60)}
-                  </Text>
-                </View>
+      {/* Threads List (shows sleek dark-mode skeleton loader during initial fetch) */}
+      {loading && threads.length === 0 ? (
+        <View style={styles.skeletonList}>
+          {[0, 1, 2, 3].map((idx) => (
+            <View key={idx} style={styles.skeletonRow}>
+              <View style={styles.skeletonAvatar} />
+              <View style={styles.skeletonMiddle}>
+                <View style={styles.skeletonLinePrimary} />
+                <View style={styles.skeletonLineSecondary} />
               </View>
+              <View style={styles.skeletonTime} />
+            </View>
+          ))}
+        </View>
+      ) : (
+        <FlatList
+          data={displayedThreads}
+          keyExtractor={(item) => item.id}
+          refreshing={loading}
+          onRefresh={fetchThreads}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => {
+            const safeTitle = getThreadDisplayTitle(item, currentUser);
+            const initials = safeTitle
+              .split(' ')
+              .filter(Boolean)
+              .map((w) => w[0])
+              .join('')
+              .toUpperCase()
+              .slice(0, 2) || 'C';
 
-              {/* Thread Info */}
-              <View style={styles.threadMiddle}>
-                <View style={styles.titleRow}>
-                  <Text style={styles.threadTitle} numberOfLines={1}>
-                    {safeTitle}
-                  </Text>
-                  {item.pin_hash ? (
-                    <Ionicons
-                      name="lock-closed"
-                      size={14}
-                      color={whatsappTheme.textSecondary}
-                      style={{ marginLeft: 6 }}
-                    />
-                  ) : null}
-                  {item.is_hidden ? (
-                    <Ionicons
-                      name="eye-off"
-                      size={14}
-                      color={whatsappTheme.accentGreen}
-                      style={{ marginLeft: 6 }}
-                    />
-                  ) : null}
-                </View>
-                <View style={styles.lastMessageRow}>
-                  {unreadCount > 0 ? (
-                    <Text
-                      style={[styles.lastMessageText, { color: whatsappTheme.accentGreen, fontWeight: '600' }]}
-                      numberOfLines={1}
-                    >
-                      New encrypted message
-                    </Text>
-                  ) : (
-                    <>
-                      <Ionicons
-                        name="checkmark-done"
-                        size={16}
-                        color={whatsappTheme.tickBlue}
-                        style={{ marginRight: 4 }}
-                      />
-                      <Text style={styles.lastMessageText} numberOfLines={1}>
-                        {item.burn_on_read ? '🔥 Burn after reading' : 'Disappearing chat'}
-                      </Text>
-                    </>
-                  )}
-                </View>
-              </View>
+            const unreadCount = unreadCounts[item.id] || 0;
+            const activity = threadActivities[item.id] || getCachedThreadActivity(item.id);
+            const activityIso = activity?.lastMessageAt || item.created_at;
+            const safeTime = (() => {
+              if (!activityIso) return '';
+              const d = new Date(activityIso);
+              const now = new Date();
+              const isSameDay =
+                d.getFullYear() === now.getFullYear() &&
+                d.getMonth() === now.getMonth() &&
+                d.getDate() === now.getDate();
+              if (isSameDay) {
+                return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              }
+              const yesterday = new Date(now);
+              yesterday.setDate(now.getDate() - 1);
+              if (
+                d.getFullYear() === yesterday.getFullYear() &&
+                d.getMonth() === yesterday.getMonth() &&
+                d.getDate() === yesterday.getDate()
+              ) {
+                return 'Yesterday';
+              }
+              return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            })();
 
-              {/* Time & Unread Badge */}
-              <View style={styles.threadRight}>
-                <Text
-                  style={[
-                    styles.timeText,
-                    unreadCount > 0 && { color: whatsappTheme.accentGreen, fontWeight: '600' },
-                  ]}
-                >
-                  {safeTime}
-                </Text>
-                {unreadCount > 0 ? (
-                  <View style={styles.unreadBadge}>
-                    <Text style={styles.unreadBadgeText}>
-                      {unreadCount > 99 ? '99+' : unreadCount}
+            const isLastSentByMe = Boolean(activity && currentUser && activity.lastSenderId === currentUser.id);
+
+            return (
+              <TouchableOpacity
+                style={styles.threadRow}
+                activeOpacity={0.7}
+                onPress={() => handleThreadPress(item)}
+                onLongPress={() => handleLongPressThread(item)}
+              >
+                {/* Avatar */}
+                <View style={styles.avatar}>
+                  <Text style={styles.avatarText}>{initials || 'C'}</Text>
+                  {/* Timer badge */}
+                  <View style={styles.timerBadge}>
+                    <Text style={styles.timerBadgeText}>
+                      {getTimerLabel(item.disappear_seconds || 60)}
                     </Text>
                   </View>
-                ) : null}
-              </View>
-            </TouchableOpacity>
-          );
-        }}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="chatbubbles-outline" size={56} color={whatsappTheme.textSecondary} />
-            <Text style={styles.emptyText}>
-              {isRevealingHidden
-                ? 'No hidden chats found'
-                : 'No conversations yet.\nTap the green button to start a chat.'}
-            </Text>
-          </View>
-        }
-      />
+                </View>
+
+                {/* Thread Info */}
+                <View style={styles.threadMiddle}>
+                  <View style={styles.titleRow}>
+                    <Text style={styles.threadTitle} numberOfLines={1}>
+                      {safeTitle}
+                    </Text>
+                    {item.pin_hash ? (
+                      <Ionicons
+                        name="lock-closed"
+                        size={14}
+                        color={whatsappTheme.textSecondary}
+                        style={{ marginLeft: 6 }}
+                      />
+                    ) : null}
+                    {item.is_hidden ? (
+                      <Ionicons
+                        name="eye-off"
+                        size={14}
+                        color={whatsappTheme.accentGreen}
+                        style={{ marginLeft: 6 }}
+                      />
+                    ) : null}
+                  </View>
+                  <View style={styles.lastMessageRow}>
+                    {unreadCount > 0 ? (
+                      <Text
+                        style={[styles.lastMessageText, { color: whatsappTheme.accentGreen, fontWeight: '600' }]}
+                        numberOfLines={1}
+                      >
+                        New encrypted message
+                      </Text>
+                    ) : activity ? (
+                      <>
+                        {isLastSentByMe ? (
+                          <Ionicons
+                            name="checkmark-done"
+                            size={16}
+                            color={activity.lastReadAt ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
+                            style={{ marginRight: 4 }}
+                          />
+                        ) : null}
+                        <Text style={styles.lastMessageText} numberOfLines={1}>
+                          {isLastSentByMe ? 'Sent' : 'Received'} •{' '}
+                          {item.burn_on_read ? '🔥 Burn 8s' : `${getTimerLabel(item.disappear_seconds || 60)} timer`}
+                        </Text>
+                      </>
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="checkmark-done"
+                          size={16}
+                          color={whatsappTheme.tickBlue}
+                          style={{ marginRight: 4 }}
+                        />
+                        <Text style={styles.lastMessageText} numberOfLines={1}>
+                          {item.burn_on_read ? '🔥 Burn after reading' : 'Disappearing chat'}
+                        </Text>
+                      </>
+                    )}
+                  </View>
+                </View>
+
+                {/* Time & Unread Badge */}
+                <View style={styles.threadRight}>
+                  <Text
+                    style={[
+                      styles.timeText,
+                      unreadCount > 0 && { color: whatsappTheme.accentGreen, fontWeight: '600' },
+                    ]}
+                  >
+                    {safeTime}
+                  </Text>
+                  {unreadCount > 0 ? (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadBadgeText}>
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              </TouchableOpacity>
+            );
+          }}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Ionicons name="chatbubbles-outline" size={56} color={whatsappTheme.textSecondary} />
+              <Text style={styles.emptyText}>
+                {isRevealingHidden
+                  ? 'No hidden chats found'
+                  : 'No conversations yet.\nTap the green button to start a chat.'}
+              </Text>
+            </View>
+          }
+        />
+      )}
 
       {/* Floating Action Button (New Chat) */}
       <TouchableOpacity
@@ -1018,6 +1157,46 @@ const styles = StyleSheet.create({
   actionItemText: {
     color: whatsappTheme.textPrimary,
     fontSize: 16,
+  },
+  skeletonList: {
+    flex: 1,
+    paddingTop: 8,
+  },
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  skeletonAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: whatsappTheme.bgHeader,
+    marginRight: 14,
+  },
+  skeletonMiddle: {
+    flex: 1,
+    gap: 8,
+  },
+  skeletonLinePrimary: {
+    width: '48%',
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: whatsappTheme.bgHeader,
+  },
+  skeletonLineSecondary: {
+    width: '72%',
+    height: 11,
+    borderRadius: 6,
+    backgroundColor: whatsappTheme.surfaceHighlight,
+  },
+  skeletonTime: {
+    width: 42,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: whatsappTheme.bgHeader,
+    marginLeft: 10,
   },
 });
 

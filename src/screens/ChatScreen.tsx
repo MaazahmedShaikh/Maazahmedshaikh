@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   FlatList,
@@ -31,6 +32,13 @@ import {
   encodeMessagePayload,
   ReplyPreview,
 } from '../lib/messagePayload';
+import {
+  deleteCachedPlaintext,
+  getCachedPlaintext,
+  getCachedThreadMessages,
+  setCachedPlaintext,
+  setCachedThreadMessages,
+} from '../lib/memoryCache';
 import { Message, Thread, User } from '../types/database';
 import { getThreadDisplayTitle } from '../lib/directChat';
 import { whatsappTheme } from '../theme/whatsappTheme';
@@ -131,7 +139,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onBack,
   onLock,
 }) => {
-  const [messages, setMessages] = useState<DecryptedMessage[]>([]);
+  const [messages, setMessages] = useState<DecryptedMessage[]>(() =>
+    getCachedThreadMessages(thread.id)
+  );
+  const [initialLoading, setInitialLoading] = useState<boolean>(
+    () => getCachedThreadMessages(thread.id).length === 0
+  );
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [partnerOnline, setPartnerOnline] = useState(false);
@@ -148,13 +163,19 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   const baseHeightRef = useRef(0);
   const latestLayoutHeightRef = useRef(0);
   const activeKbHeightRef = useRef(0);
+  const pageLimitRef = useRef(40);
+  const messagesRef = useRef<DecryptedMessage[]>(messages);
   const flatListRef = useRef<FlatList>(null);
   const channelRef = useRef<any>(null);
   const typingTimeoutRef = useRef<any>(null);
   const isCurrentlyTypingRef = useRef(false);
-  const decryptedCacheRef = useRef<Map<string, string>>(new Map());
   const burningIdsRef = useRef<Set<string>>(new Set());
   const burnIntervalsRef = useRef<Map<string, any>>(new Map());
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    setCachedThreadMessages(thread.id, messages);
+  }, [thread.id, messages]);
 
   // Starts a synchronized burn countdown in memory for either sender (display) or receiver (delete)
   const startBurnCountdown = useCallback(
@@ -253,17 +274,95 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     };
   }, [insets.bottom]);
 
-  // Fetch messages, subscribe to Realtime (WAL + Broadcast + Presence), and keep 2.5s silent sync fallback
+  // Fast paginated sync + lightweight metadata delta fallback (keeps Supabase RAM minimal)
+  const decryptCached = useCallback(async (m: Message): Promise<string> => {
+    const cached = getCachedPlaintext(m.id);
+    if (cached !== undefined) return cached;
+    const plain = await decryptMessage(m.content);
+    setCachedPlaintext(m.id, plain);
+    return plain;
+  }, []);
+
+  const syncFromServer = useCallback(async (limitCount = pageLimitRef.current) => {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('thread_id', thread.id)
+      .gt('expires_at', nowIso)
+      .order('created_at', { ascending: false })
+      .limit(limitCount);
+
+    if (error || !data) {
+      setInitialLoading(false);
+      return;
+    }
+
+    setHasOlderMessages(data.length >= limitCount);
+    const validRows = (data as Message[]).slice().reverse();
+    const serverIds = new Set(validRows.map((m) => m.id));
+
+    const decryptedRows = await Promise.all(
+      validRows.map(async (m) => {
+        const content = await decryptCached(m);
+        return { ...m, content } as DecryptedMessage;
+      })
+    );
+
+    setMessages((prev) => {
+      const prevMap = new Map(prev.map((m) => [m.id, m]));
+      const next: DecryptedMessage[] = decryptedRows.map((row) => {
+        const existing = prevMap.get(row.id);
+        return existing
+          ? {
+              ...row,
+              isBurning: existing.isBurning,
+              remainingSeconds: existing.remainingSeconds,
+            }
+          : row;
+      });
+      // Keep mid-flight optimistic messages so UI never flickers while uploading
+      prev.forEach((m) => {
+        if (m.isOptimistic && !serverIds.has(m.id)) {
+          next.push(m);
+        } else if (!m.isOptimistic && !serverIds.has(m.id)) {
+          const interval = burnIntervalsRef.current.get(m.id);
+          if (interval) {
+            clearInterval(interval);
+            burnIntervalsRef.current.delete(m.id);
+          }
+          burningIdsRef.current.delete(m.id);
+          deleteCachedPlaintext(m.id);
+        }
+      });
+      return next;
+    });
+
+    setInitialLoading(false);
+
+    if (thread.burn_on_read) {
+      decryptedRows.forEach((m) => {
+        if (m.sender_id !== currentUserId) {
+          handleIncomingBurn(m.id);
+        } else if (m.read_at) {
+          const elapsed = Math.floor((Date.now() - new Date(m.read_at).getTime()) / 1000);
+          const remaining = Math.max(1, 8 - elapsed);
+          startBurnCountdown(m.id, remaining, false);
+        }
+      });
+    }
+  }, [thread.id, thread.burn_on_read, currentUserId, decryptCached, handleIncomingBurn, startBurnCountdown]);
+
+  const handleLoadEarlier = async () => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    pageLimitRef.current += 40;
+    await syncFromServer(pageLimitRef.current);
+    setLoadingOlder(false);
+  };
+
   useEffect(() => {
     let mounted = true;
-
-    const decryptCached = async (m: Message): Promise<string> => {
-      const cached = decryptedCacheRef.current.get(m.id);
-      if (cached !== undefined) return cached;
-      const plain = await decryptMessage(m.content);
-      decryptedCacheRef.current.set(m.id, plain);
-      return plain;
-    };
 
     const applyIncomingRow = async (rawMsg: Message) => {
       if (new Date(rawMsg.expires_at) <= new Date()) return;
@@ -286,72 +385,59 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       }
     };
 
-    const syncFromServer = async () => {
-      const { data, error } = await supabase
+    // Lightweight metadata delta sync: avoids re-transferring large image blobs every interval
+    const lightweightDeltaSync = async () => {
+      const nowIso = new Date().toISOString();
+      const { data: metaRows, error } = await supabase
         .from('messages')
-        .select('*')
+        .select('id, sender_id, read_at, expires_at')
         .eq('thread_id', thread.id)
-        .order('created_at', { ascending: true });
+        .gt('expires_at', nowIso)
+        .order('created_at', { ascending: false })
+        .limit(pageLimitRef.current);
 
-      if (!mounted || error || !data) return;
+      if (!mounted || error || !metaRows) return;
 
-      const now = new Date();
-      const validRows = (data as Message[]).filter((m) => new Date(m.expires_at) > now);
-      const serverIds = new Set(validRows.map((m) => m.id));
+      const typedMeta = metaRows as { id: string; sender_id: string; read_at: string | null; expires_at: string }[];
+      const metaMap = new Map(typedMeta.map((r) => [r.id, r]));
+      const existingIds = new Set(messagesRef.current.map((m) => m.id));
+      const missingIds = typedMeta.filter((r) => !existingIds.has(r.id)).map((r) => r.id);
 
-      const decryptedRows = await Promise.all(
-        validRows.map(async (m) => {
-          const content = await decryptCached(m);
-          return { ...m, content } as DecryptedMessage;
-        })
+      setMessages((prev) =>
+        prev
+          .filter((m) => m.isOptimistic || metaMap.has(m.id))
+          .map((m) => {
+            const meta = metaMap.get(m.id);
+            return meta ? { ...m, read_at: meta.read_at, expires_at: meta.expires_at } : m;
+          })
       );
 
-      if (!mounted) return;
-
-      setMessages((prev) => {
-        const prevMap = new Map(prev.map((m) => [m.id, m]));
-        const next: DecryptedMessage[] = decryptedRows.map((row) => {
-          const existing = prevMap.get(row.id);
-          return existing
-            ? {
-                ...row,
-                isBurning: existing.isBurning,
-                remainingSeconds: existing.remainingSeconds,
-              }
-            : row;
-        });
-        // Keep mid-flight optimistic messages so UI never flickers while uploading
-        prev.forEach((m) => {
-          if (m.isOptimistic && !serverIds.has(m.id)) {
-            next.push(m);
-          } else if (!m.isOptimistic && !serverIds.has(m.id)) {
-            const interval = burnIntervalsRef.current.get(m.id);
-            if (interval) {
-              clearInterval(interval);
-              burnIntervalsRef.current.delete(m.id);
-            }
-            burningIdsRef.current.delete(m.id);
-            decryptedCacheRef.current.delete(m.id);
-          }
-        });
-        return next;
-      });
-
       if (thread.burn_on_read) {
-        decryptedRows.forEach((m) => {
-          if (m.sender_id !== currentUserId) {
-            handleIncomingBurn(m.id);
-          } else if (m.read_at) {
-            const elapsed = Math.floor((Date.now() - new Date(m.read_at).getTime()) / 1000);
+        typedMeta.forEach((meta) => {
+          if (meta.sender_id === currentUserId && meta.read_at) {
+            const elapsed = Math.floor((Date.now() - new Date(meta.read_at).getTime()) / 1000);
             const remaining = Math.max(1, 8 - elapsed);
-            startBurnCountdown(m.id, remaining, false);
+            startBurnCountdown(meta.id, remaining, false);
           }
         });
+      }
+
+      if (missingIds.length > 0) {
+        const { data: missingRows } = await supabase
+          .from('messages')
+          .select('*')
+          .in('id', missingIds);
+
+        if (mounted && missingRows) {
+          for (const row of missingRows as Message[]) {
+            await applyIncomingRow(row);
+          }
+        }
       }
     };
 
     syncFromServer();
-    const syncTimer = setInterval(syncFromServer, 2500);
+    const syncTimer = setInterval(lightweightDeltaSync, 12000);
 
     // Realtime channel for WAL postgres_changes + instant WebSocket broadcast + ephemeral presence
     const channel = supabase
@@ -388,6 +474,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       })
       .on('broadcast', { event: 'del_msg' }, ({ payload }) => {
         if (payload?.id) {
+          deleteCachedPlaintext(payload.id);
           setMessages((prev) => prev.filter((m) => m.id !== payload.id));
         }
       })
@@ -413,10 +500,13 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           if (payload.eventType === 'INSERT') {
             await applyIncomingRow(payload.new as Message);
           } else if (payload.eventType === 'DELETE') {
+            deleteCachedPlaintext(payload.old.id);
             setMessages((prev) => prev.filter((m) => m.id !== payload.old.id));
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as Message;
-            const plainContent = await decryptMessage(updated.content);
+            const cachedPlain = getCachedPlaintext(updated.id);
+            const plainContent =
+              cachedPlain !== undefined ? cachedPlain : await decryptCached(updated);
             setMessages((prev) =>
               prev.map((m) =>
                 m.id === updated.id ? { ...m, ...updated, content: plainContent } : m
@@ -460,7 +550,16 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       channelRef.current = null;
       supabase.removeChannel(channel);
     };
-  }, [thread.id, thread.burn_on_read, currentUserId, handleIncomingBurn, startBurnCountdown, onUpdateThread]);
+  }, [
+    thread.id,
+    thread.burn_on_read,
+    currentUserId,
+    decryptCached,
+    handleIncomingBurn,
+    startBurnCountdown,
+    syncFromServer,
+    onUpdateThread,
+  ]);
 
   // 1-second interval to purge expired messages from memory and clean up expired rows
   useEffect(() => {
@@ -555,7 +654,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     }
 
     if (data) {
-      decryptedCacheRef.current.set(data.id, rawPayload);
+      setCachedPlaintext(data.id, rawPayload);
       channelRef.current?.send({
         type: 'broadcast',
         event: 'new_msg',
@@ -744,6 +843,31 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     .toUpperCase()
     .slice(0, 2) || 'C';
 
+  const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+  const lastActivityLabel = lastMessage
+    ? `${lastMessage.sender_id === currentUserId ? 'Last sent' : 'Last recd'} ${new Date(
+        lastMessage.created_at
+      ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : null;
+
+  const formatDatePill = (iso: string) => {
+    const d = new Date(iso);
+    const now = new Date();
+    const isToday =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    if (isToday) return 'Today';
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday =
+      d.getFullYear() === yesterday.getFullYear() &&
+      d.getMonth() === yesterday.getMonth() &&
+      d.getDate() === yesterday.getDate();
+    if (isYesterday) return 'Yesterday';
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+
   return (
     <SafeAreaView
       style={styles.container}
@@ -768,6 +892,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
         <View style={styles.headerAvatar}>
           <Text style={styles.headerAvatarText}>{initials || 'C'}</Text>
+          {partnerOnline ? <View style={styles.onlineDot} /> : null}
         </View>
 
         <TouchableOpacity
@@ -780,16 +905,17 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           </Text>
           <View style={styles.headerSubRow}>
             {partnerTyping ? (
-              <Text style={[styles.headerSubtitle, { color: whatsappTheme.accentGreen }]}>
+              <Text style={[styles.headerSubtitle, { color: whatsappTheme.accentGreen, fontWeight: '600' }]}>
                 typing...
               </Text>
             ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                <Text style={styles.headerSubtitle}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 }}>
+                <Text style={styles.headerSubtitle} numberOfLines={1}>
                   {partnerOnline ? 'online • ' : ''}
+                  {lastActivityLabel ? `${lastActivityLabel} • ` : ''}
                   {thread.burn_on_read
-                    ? '🔥 Burn on read (8s)'
-                    : `⏱ ${formatTimerLabel(thread.disappear_seconds || 60)} timer`}
+                    ? '🔥 Burn (8s)'
+                    : `⏱ ${formatTimerLabel(thread.disappear_seconds || 60)}`}
                 </Text>
                 <Ionicons name="chevron-down" size={12} color={whatsappTheme.textSecondary} />
               </View>
@@ -812,120 +938,198 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       >
         {/* Messages Canvas */}
         <View style={styles.canvas}>
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            keyExtractor={(item) => item.id}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.messagesList}
-          onContentSizeChange={() => {
-            if (!showScrollBottom) {
-              flatListRef.current?.scrollToEnd({ animated: false });
-            }
-          }}
-          onScroll={(e) => {
-            const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-            const distanceFromBottom =
-              contentSize.height - contentOffset.y - layoutMeasurement.height;
-            setShowScrollBottom(distanceFromBottom > 140);
-          }}
-          scrollEventThrottle={100}
-          renderItem={({ item }) => {
-            const isOutgoing = item.sender_id === currentUserId;
-            const parsed = decodeMessagePayload(item.content);
-            const timeStr = new Date(item.created_at).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            });
-
-            return (
-              <SwipeableMessageBubble message={item} onSwipeReply={handleReplyMessage}>
-                <View
-                  style={[
-                    styles.bubbleContainer,
-                    isOutgoing ? styles.outgoingContainer : styles.incomingContainer,
-                  ]}
-                >
+          {initialLoading && messages.length === 0 ? (
+            <View style={styles.chatLoaderContainer}>
+              <View style={styles.chatLoaderCard}>
+                <ActivityIndicator size="small" color={whatsappTheme.accentGreen} />
+                <Text style={styles.chatLoaderText}>Decrypting messages...</Text>
+              </View>
+            </View>
+          ) : (
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              keyExtractor={(item) => item.id}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.messagesList}
+              ListHeaderComponent={
+                hasOlderMessages ? (
                   <TouchableOpacity
-                    activeOpacity={0.85}
-                    onLongPress={() => {
-                      try {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      } catch {}
-                      setSelectedMsg(item);
-                    }}
-                    style={[
-                      styles.bubble,
-                      isOutgoing ? styles.outgoingBubble : styles.incomingBubble,
-                    ]}
+                    style={styles.loadEarlierBtn}
+                    activeOpacity={0.75}
+                    onPress={handleLoadEarlier}
+                    disabled={loadingOlder}
                   >
-                    {parsed.replyTo ? (
-                      <View style={styles.replyQuoteBox}>
-                        <Text style={styles.replyQuoteText} numberOfLines={2}>
-                          {parsed.replyTo.preview}
-                        </Text>
+                    {loadingOlder ? (
+                      <ActivityIndicator size="small" color={whatsappTheme.accentGreen} />
+                    ) : (
+                      <Text style={styles.loadEarlierText}>Load earlier messages</Text>
+                    )}
+                  </TouchableOpacity>
+                ) : undefined
+              }
+              onContentSizeChange={() => {
+                if (!showScrollBottom) {
+                  flatListRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
+              onScroll={(e) => {
+                const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+                const distanceFromBottom =
+                  contentSize.height - contentOffset.y - layoutMeasurement.height;
+                setShowScrollBottom(distanceFromBottom > 140);
+              }}
+              scrollEventThrottle={100}
+              renderItem={({ item, index }) => {
+                const isOutgoing = item.sender_id === currentUserId;
+                const parsed = decodeMessagePayload(item.content);
+                const timeStr = new Date(item.created_at).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+
+                const prevMsg = index > 0 ? messages[index - 1] : null;
+                const nextMsg = index < messages.length - 1 ? messages[index + 1] : null;
+                const curDayKey = new Date(item.created_at).toDateString();
+                const prevDayKey = prevMsg ? new Date(prevMsg.created_at).toDateString() : null;
+                const nextDayKey = nextMsg ? new Date(nextMsg.created_at).toDateString() : null;
+                const showDateDivider = curDayKey !== prevDayKey;
+                const isFirstInGroup = showDateDivider || prevMsg?.sender_id !== item.sender_id;
+                const isLastInGroup = nextDayKey !== curDayKey || nextMsg?.sender_id !== item.sender_id;
+
+                return (
+                  <View>
+                    {showDateDivider ? (
+                      <View style={styles.datePillWrapper}>
+                        <View style={styles.datePill}>
+                          <Text style={styles.datePillText}>{formatDatePill(item.created_at)}</Text>
+                        </View>
                       </View>
                     ) : null}
 
-                    {parsed.imageBase64 ? (
-                      <TouchableOpacity
-                        activeOpacity={0.9}
-                        onPress={() =>
-                          setPreviewImageUri(`data:image/jpeg;base64,${parsed.imageBase64}`)
-                        }
-                        onLongPress={() => setSelectedMsg(item)}
+                    <SwipeableMessageBubble message={item} onSwipeReply={handleReplyMessage}>
+                      <View
+                        style={[
+                          styles.bubbleContainer,
+                          isOutgoing ? styles.outgoingContainer : styles.incomingContainer,
+                          {
+                            marginTop: isFirstInGroup ? 8 : 2,
+                            marginBottom: isLastInGroup ? 4 : 1,
+                          },
+                        ]}
                       >
-                        <Image
-                          source={{ uri: `data:image/jpeg;base64,${parsed.imageBase64}` }}
-                          style={styles.bubbleImage}
-                          resizeMode="cover"
-                        />
-                      </TouchableOpacity>
-                    ) : null}
+                        <TouchableOpacity
+                          activeOpacity={0.85}
+                          onLongPress={() => {
+                            try {
+                              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                            } catch {}
+                            setSelectedMsg(item);
+                          }}
+                          style={[
+                            styles.bubble,
+                            isOutgoing ? styles.outgoingBubble : styles.incomingBubble,
+                            isOutgoing && !isFirstInGroup && { borderTopRightRadius: 14 },
+                            !isOutgoing && !isFirstInGroup && { borderTopLeftRadius: 14 },
+                          ]}
+                        >
+                          {parsed.replyTo ? (
+                            <View
+                              style={[
+                                styles.replyQuoteBox,
+                                {
+                                  borderLeftColor: isOutgoing
+                                    ? whatsappTheme.tickBlue
+                                    : whatsappTheme.accentGreen,
+                                },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.replyQuoteAuthor,
+                                  {
+                                    color: isOutgoing
+                                      ? whatsappTheme.tickBlue
+                                      : whatsappTheme.accentGreen,
+                                  },
+                                ]}
+                              >
+                                Quoted message
+                              </Text>
+                              <Text style={styles.replyQuoteText} numberOfLines={2}>
+                                {parsed.replyTo.preview}
+                              </Text>
+                            </View>
+                          ) : null}
 
-                    {parsed.text ? (
-                      <Text style={styles.messageText}>{parsed.text}</Text>
-                    ) : null}
+                          {parsed.imageBase64 ? (
+                            <TouchableOpacity
+                              activeOpacity={0.9}
+                              onPress={() =>
+                                setPreviewImageUri(`data:image/jpeg;base64,${parsed.imageBase64}`)
+                              }
+                              onLongPress={() => setSelectedMsg(item)}
+                              style={styles.imageWrapper}
+                            >
+                              <Image
+                                source={{ uri: `data:image/jpeg;base64,${parsed.imageBase64}` }}
+                                style={styles.bubbleImage}
+                                resizeMode="cover"
+                              />
+                              {item.isOptimistic ? (
+                                <View style={styles.imageUploadOverlay}>
+                                  <ActivityIndicator size="small" color="#FFFFFF" />
+                                  <Text style={styles.imageUploadText}>Encrypting...</Text>
+                                </View>
+                              ) : null}
+                            </TouchableOpacity>
+                          ) : null}
 
-                    <View style={styles.metaRow}>
-                      {item.isBurning && item.remainingSeconds !== undefined ? (
-                        <View style={styles.burnBadge}>
-                          <Ionicons name="flame" size={12} color="#FFA500" />
-                          <Text style={styles.burnBadgeText}>
-                            {item.remainingSeconds}s
-                          </Text>
-                        </View>
-                      ) : thread.burn_on_read ? (
-                        <Text style={styles.burnHint}>🔥</Text>
-                      ) : null}
+                          {parsed.text ? (
+                            <Text style={styles.messageText}>{parsed.text}</Text>
+                          ) : null}
 
-                      <Text style={styles.timeMeta}>{timeStr}</Text>
+                          <View style={styles.metaRow}>
+                            {item.isBurning && item.remainingSeconds !== undefined ? (
+                              <View style={styles.burnBadge}>
+                                <Ionicons name="flame" size={12} color="#FFA500" />
+                                <Text style={styles.burnBadgeText}>
+                                  {item.remainingSeconds}s
+                                </Text>
+                              </View>
+                            ) : thread.burn_on_read ? (
+                              <Text style={styles.burnHint}>🔥</Text>
+                            ) : null}
 
-                      {isOutgoing ? (
-                        <Ionicons
-                          name={item.isOptimistic ? 'time-outline' : 'checkmark-done'}
-                          size={15}
-                          color={item.read_at ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
-                          style={{ marginLeft: 3 }}
-                        />
-                      ) : null}
-                    </View>
-                  </TouchableOpacity>
+                            <Text style={styles.timeMeta}>{timeStr}</Text>
+
+                            {isOutgoing ? (
+                              <Ionicons
+                                name={item.isOptimistic ? 'time-outline' : 'checkmark-done'}
+                                size={15}
+                                color={item.read_at ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
+                                style={{ marginLeft: 3 }}
+                              />
+                            ) : null}
+                          </View>
+                        </TouchableOpacity>
+                      </View>
+                    </SwipeableMessageBubble>
+                  </View>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={styles.emptyMessagesContainer}>
+                  <View style={styles.securityBanner}>
+                    <Ionicons name="lock-closed" size={14} color="#F5A623" />
+                    <Text style={styles.securityBannerText}>
+                      Messages are end-to-end ciphered with your device secret and burn automatically from Supabase. Zero messages are saved to disk.
+                    </Text>
+                  </View>
                 </View>
-              </SwipeableMessageBubble>
-            );
-          }}
-          ListEmptyComponent={
-            <View style={styles.emptyMessagesContainer}>
-              <View style={styles.securityBanner}>
-                <Ionicons name="lock-closed" size={14} color="#F5A623" />
-                <Text style={styles.securityBannerText}>
-                  Messages are end-to-end ciphered with your device secret and burn automatically from Supabase. Zero messages are saved to disk.
-                </Text>
-              </View>
-            </View>
-          }
-        />
+              }
+            />
+          )}
 
         {/* Floating Scroll-to-Bottom Button */}
         {showScrollBottom ? (
@@ -1206,12 +1410,10 @@ const styles = StyleSheet.create({
   },
   messagesList: {
     paddingHorizontal: 12,
-    paddingVertical: 12,
-    gap: 8,
+    paddingVertical: 10,
   },
   bubbleContainer: {
     flexDirection: 'row',
-    marginVertical: 2,
   },
   outgoingContainer: {
     justifyContent: 'flex-end',
@@ -1221,18 +1423,83 @@ const styles = StyleSheet.create({
   },
   bubble: {
     maxWidth: '82%',
-    borderRadius: 10,
+    borderRadius: 14,
     paddingHorizontal: 12,
     paddingTop: 8,
     paddingBottom: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.16,
+    shadowRadius: 2,
+    elevation: 1,
   },
   outgoingBubble: {
     backgroundColor: whatsappTheme.bubbleOutgoing,
-    borderTopRightRadius: 2,
+    borderTopRightRadius: 3,
   },
   incomingBubble: {
     backgroundColor: whatsappTheme.bubbleIncoming,
-    borderTopLeftRadius: 2,
+    borderTopLeftRadius: 3,
+  },
+  onlineDot: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: whatsappTheme.accentGreen,
+    borderWidth: 2,
+    borderColor: whatsappTheme.bgHeader,
+  },
+  chatLoaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chatLoaderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: whatsappTheme.bgHeader,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 24,
+    gap: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: whatsappTheme.divider,
+  },
+  chatLoaderText: {
+    color: whatsappTheme.textSecondary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  loadEarlierBtn: {
+    alignSelf: 'center',
+    backgroundColor: whatsappTheme.bgHeader,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 16,
+    marginBottom: 10,
+  },
+  loadEarlierText: {
+    color: whatsappTheme.accentGreen,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  datePillWrapper: {
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  datePill: {
+    backgroundColor: 'rgba(31, 44, 52, 0.92)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  datePillText: {
+    color: whatsappTheme.textSecondary,
+    fontSize: 11,
+    fontWeight: '600',
   },
   messageText: {
     color: whatsappTheme.textPrimary,
@@ -1291,10 +1558,12 @@ const styles = StyleSheet.create({
   },
   composerContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-end',
     paddingHorizontal: 8,
     paddingVertical: 8,
     backgroundColor: whatsappTheme.bgPrimary,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: whatsappTheme.divider,
     gap: 8,
   },
   pillInput: {
@@ -1325,23 +1594,49 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   replyQuoteBox: {
-    backgroundColor: 'rgba(0,0,0,0.22)',
+    backgroundColor: 'rgba(0,0,0,0.24)',
     borderLeftWidth: 3,
     borderLeftColor: whatsappTheme.accentGreen,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: 7,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     marginBottom: 6,
   },
+  replyQuoteAuthor: {
+    fontSize: 11,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
   replyQuoteText: {
-    color: whatsappTheme.textSecondary,
+    color: '#D1D7DB',
     fontSize: 12,
   },
+  imageWrapper: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 5,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
   bubbleImage: {
-    width: 210,
-    height: 210,
-    borderRadius: 8,
-    marginBottom: 4,
+    width: 224,
+    height: 224,
+  },
+  imageUploadOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.52)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  imageUploadText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   scrollBottomBtn: {
     position: 'absolute',

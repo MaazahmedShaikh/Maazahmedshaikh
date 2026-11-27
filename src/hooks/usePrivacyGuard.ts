@@ -5,6 +5,7 @@ import { Accelerometer } from 'expo-sensors';
 
 interface PrivacyGuardOptions {
   onPanicLock: () => void;
+  onBackgroundStateChange?: (isMasked: boolean) => void;
   isActiveScreenSecure?: boolean;
   motionAutoLock?: boolean;
   suspendAutoLock?: boolean;
@@ -13,21 +14,28 @@ interface PrivacyGuardOptions {
 /**
  * Global privacy hook:
  * 1. Prevents screenshots on Android (avoids iOS black screen overlay)
- * 2. Locks app back to calculator on AppState background (unless suspended for OS media picker)
+ * 2. Immediately masks the screen with Calculator overlay on 'inactive' (app switcher / Control Center)
+ *    and locks app back to calculator on 'background' (unless suspended for OS media picker)
  * 3. Locks app back to calculator on held face-down flip (1 full second) or extreme shake
  */
 export function usePrivacyGuard({
   onPanicLock,
+  onBackgroundStateChange,
   isActiveScreenSecure = false,
   motionAutoLock = true,
   suspendAutoLock = false,
 }: PrivacyGuardOptions) {
   const faceDownTimer = useRef<any>(null);
   const suspendAutoLockRef = useRef(suspendAutoLock);
+  const onMaskChangeRef = useRef(onBackgroundStateChange);
 
   useEffect(() => {
     suspendAutoLockRef.current = suspendAutoLock;
   }, [suspendAutoLock]);
+
+  useEffect(() => {
+    onMaskChangeRef.current = onBackgroundStateChange;
+  }, [onBackgroundStateChange]);
 
   // Prevent screenshots safely on Android only (avoids iOS black screen overlay)
   useEffect(() => {
@@ -38,10 +46,19 @@ export function usePrivacyGuard({
     } catch { }
   }, []);
 
-  // AppState: only lock when explicitly going to background (not during active use or OS media picker)
+  // AppState: mask immediately on 'inactive' (before OS captures app-switcher snapshot)
+  // and hard-lock on 'background' (unless suspended for OS photo picker)
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
-      if (nextAppState === 'background' && !suspendAutoLockRef.current) {
+      if (suspendAutoLockRef.current) {
+        return;
+      }
+      if (nextAppState === 'active') {
+        onMaskChangeRef.current?.(false);
+      } else if (nextAppState === 'inactive') {
+        onMaskChangeRef.current?.(true);
+      } else if (nextAppState === 'background') {
+        onMaskChangeRef.current?.(true);
         onPanicLock();
       }
     });
@@ -99,7 +116,7 @@ export function usePrivacyGuard({
     return () => {
       try {
         subscription?.remove?.();
-      } catch {}
+      } catch { }
       if (faceDownTimer.current) {
         clearTimeout(faceDownTimer.current);
         faceDownTimer.current = null;

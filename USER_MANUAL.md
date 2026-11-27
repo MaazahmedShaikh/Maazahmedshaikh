@@ -1,4 +1,4 @@
-3# SmartCalc — Private Messenger User Manual
+# SmartCalc — Private Messenger User Manual
 
 SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised as a working calculator. Zero messages or chat titles are stored on your device disk.
 
@@ -37,9 +37,9 @@ SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised 
    - **In-Chat Timer Switcher:** Tap the subtitle (`🔥 Burn` / `⏱ 60s timer`) in the chat header to switch disappearing timers (`10s`, `1m`, `1h`, `24h`) or toggle Burn-on-Read right inside the conversation.
    - **Emoji Bar & Scroll Button:** Tap the smiley icon (`😊`) to open the quick emoji bar. When scrolled up in a chat, tap the floating **`↓`** button to jump to the latest message.
    - **Live Unread Badges:** When new messages arrive while you're on the Chats screen, a green unread counter appears automatically on the conversation row.
-   - **Ephemeral Presence:** See `online` and `typing...` in the chat header via WebSocket memory (zero database writes).
+   - **Ephemeral Presence & Activity Time:** See `online`, `typing...`, and the last sent/received timestamp right in the chat header, plus WhatsApp-style date pills (`Today`, `Yesterday`) and latest chat activity times on the **Chats** list.
    - **Synced Burn Countdown:** Once the recipient reads a burn-on-read message, both sender and receiver see the live `🔥 8s...` countdown before permanent deletion.
-   - **Disguised Alerts:** Incoming messages outside the active chat trigger harmless calculator notifications (e.g., *"Memory register cleared."*) with zero sender or message details.
+   - **Disguised Alerts:** Incoming messages outside the active chat trigger harmless calculator notifications (e.g., *"Memory register cleared."*) with zero sender or message details. *(Background push delivery requires FCM/APNs credentials linked to Supabase.)*
 
 ---
 
@@ -60,7 +60,7 @@ Press and hold any conversation in the **Chats** list to open its options:
 
 * **Instant Panic Lock:** Any of the following immediately wipes decrypted messages from memory and returns to the calculator:
   1. Tapping the **Lock icon** (`🔒`) at the top right.
-  2. Switching apps or pressing Home (app goes to background).
+  2. **App Switcher Shield & Minimize Lock:** Opening the app switcher / Control Center immediately covers the screen with the decoy Calculator preview, and sending the app to the background wipes decrypted RAM and locks back to the Calculator.
   3. **Inactivity Auto-Lock:** Leaving the vault/chat untouched for your configured timeout (`30s`, `60s`, `2m`, or `Off` in **`⋮` > Stealth settings**).
   4. Holding the phone **face-down for 1 full second** (or a sharp shake) while inside the vault (toggleable in Stealth settings).
 * **Panic Wipe All Data:** Tap **`⋮` > Panic Wipe All Data** on the Chats screen to permanently erase all threads and messages from Supabase, sign out, and lock the app.

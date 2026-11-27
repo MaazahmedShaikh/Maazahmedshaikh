@@ -24,9 +24,29 @@ create table if not exists public.messages (
   created_at timestamptz default now()
 );
 
--- Ensure full row payloads in Realtime WAL events
-alter table public.threads replica identity full;
-alter table public.messages replica identity full;
+-- Create push tokens table for cross-platform disguised push delivery
+create table if not exists public.user_push_tokens (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  expo_push_token text not null unique,
+  platform text not null,
+  updated_at timestamptz default now()
+);
+
+-- Performance indexes to prevent full table scans & minimize Postgres RAM usage
+create index if not exists idx_messages_thread_expires_created
+  on public.messages (thread_id, expires_at, created_at desc);
+
+create index if not exists idx_messages_expires_at
+  on public.messages (expires_at);
+
+create index if not exists idx_user_push_tokens_user_id
+  on public.user_push_tokens (user_id);
+
+-- Use DEFAULT replica identity (primary key only) so Postgres WAL & Realtime
+-- do not buffer/serialize full TOASTed image payloads on every UPDATE or DELETE
+alter table public.threads replica identity default;
+alter table public.messages replica identity default;
 
 -- Enable Realtime replication safely (ignore if already added)
 do $$
@@ -40,14 +60,17 @@ end $$;
 grant usage on schema public to anon, authenticated;
 grant all on table public.threads to anon, authenticated;
 grant all on table public.messages to anon, authenticated;
+grant all on table public.user_push_tokens to anon, authenticated;
 
 -- Enable Row Level Security
 alter table public.threads enable row level security;
 alter table public.messages enable row level security;
+alter table public.user_push_tokens enable row level security;
 
 -- Drop old policies if they exist
 drop policy if exists "Strict 2-user threads access" on public.threads;
 drop policy if exists "Strict 2-user messages access" on public.messages;
+drop policy if exists "Strict 2-user push tokens access" on public.user_push_tokens;
 drop policy if exists "Allow logged in users on threads" on public.threads;
 drop policy if exists "Allow logged in users on messages" on public.messages;
 
@@ -62,13 +85,38 @@ create policy "Strict 2-user messages access" on public.messages
   using (auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642'))
   with check (auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642'));
 
+create policy "Strict 2-user push tokens access" on public.user_push_tokens
+  for all to authenticated
+  using (
+    auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642')
+    and auth.uid() = user_id
+  )
+  with check (
+    auth.uid() in ('7003aff8-20e1-4c59-b194-46797fc3957e', '0389abd2-3e56-4142-93d2-76a582f86642')
+    and auth.uid() = user_id
+  );
+
 -- Server-side safety net: purge expired messages or unread messages older than 7 days every minute
+do $$
+begin
+  perform cron.unschedule('purge-expired-stealth-messages');
+exception
+  when others then null;
+end $$;
+
 do $$
 begin
   perform cron.schedule(
     'purge-expired-stealth-messages',
     '* * * * *',
-    $cron$ delete from public.messages where expires_at <= now() or created_at < now() - interval '7 days'; $cron$
+    $cron$
+      delete from public.messages
+      where id in (
+        select id from public.messages
+        where expires_at <= now() or created_at < now() - interval '7 days'
+        limit 200
+      );
+    $cron$
   );
 exception
   when others then null;
