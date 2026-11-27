@@ -1,6 +1,7 @@
--- Create extension
+-- Create extensions
 create extension if not exists "uuid-ossp";
 create extension if not exists pg_cron;
+create extension if not exists pg_net with schema extensions;
 
 -- Create threads table
 create table if not exists public.threads (
@@ -121,3 +122,59 @@ begin
 exception
   when others then null;
 end $$;
+
+-- Automatic zero-CLI remote disguised push trigger via pg_net + Expo Push API
+create or replace function public.dispatch_disguised_push()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  push_payload jsonb;
+  picked_body text;
+  tips text[] := array[
+    'Tip: Rotate or tap +/- for quick sign conversion.',
+    'Memory register cleared.',
+    'Precision calculation engine ready.',
+    'Daily calculation summary updated.'
+  ];
+begin
+  picked_body := tips[1 + floor(random() * array_length(tips, 1))::int];
+
+  select jsonb_agg(
+    jsonb_build_object(
+      'to', t.expo_push_token,
+      'title', 'SmartCalc',
+      'body', picked_body,
+      'sound', 'default',
+      'priority', 'high'
+    ) || case
+      when t.platform = 'android' then jsonb_build_object('channelId', 'smartcalc_tips')
+      else '{}'::jsonb
+    end
+  )
+  into push_payload
+  from public.user_push_tokens t
+  where t.user_id <> new.sender_id;
+
+  if push_payload is not null and jsonb_array_length(push_payload) > 0 then
+    perform net.http_post(
+      url := 'https://exp.host/--/api/v2/push/send',
+      headers := '{"Content-Type": "application/json", "Accept": "application/json"}'::jsonb,
+      body := push_payload
+    );
+  end if;
+
+  return new;
+exception
+  when others then
+    return new;
+end;
+$$;
+
+drop trigger if exists tr_dispatch_disguised_push on public.messages;
+create trigger tr_dispatch_disguised_push
+  after insert on public.messages
+  for each row
+  execute function public.dispatch_disguised_push();

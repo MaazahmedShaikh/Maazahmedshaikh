@@ -16,6 +16,11 @@ const DISGUISED_ALERTS = [
 
 let handlerConfigured = false;
 let channelConfigured = false;
+let suppressForegroundAlerts = false;
+
+export function setSuppressForegroundAlerts(suppress: boolean) {
+  suppressForegroundAlerts = suppress;
+}
 
 /**
  * Configures foreground notification behavior without exposing message data.
@@ -26,9 +31,9 @@ export function ensureNotificationHandler() {
   try {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowBanner: true,
-        shouldShowList: true,
-        shouldPlaySound: true,
+        shouldShowBanner: !suppressForegroundAlerts,
+        shouldShowList: !suppressForegroundAlerts,
+        shouldPlaySound: !suppressForegroundAlerts,
         shouldSetBadge: false,
       }),
     });

@@ -12,6 +12,7 @@ import {
 import {
   registerExpoPushToken,
   requestNotificationPermission,
+  setSuppressForegroundAlerts,
   triggerDisguisedNotification,
 } from './src/lib/notifications';
 import { clearMemoryCache } from './src/lib/memoryCache';
@@ -77,6 +78,7 @@ export default function App() {
   useEffect(() => {
     currentScreenRef.current = currentScreen;
     activeThreadIdRef.current = activeThread?.id ?? null;
+    setSuppressForegroundAlerts(currentScreen === 'chat');
   }, [currentScreen, activeThread?.id]);
 
   useEffect(() => {
