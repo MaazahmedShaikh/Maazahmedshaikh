@@ -123,7 +123,7 @@ exception
   when others then null;
 end $$;
 
--- Automatic zero-CLI remote disguised push trigger via pg_net + Expo Push API
+-- Automatic zero-CLI remote disguised push trigger via pg_net (Expo Push + optional ntfy topic)
 create or replace function public.dispatch_disguised_push()
 returns trigger
 language plpgsql
@@ -132,6 +132,7 @@ set search_path = public, extensions
 as $$
 declare
   push_payload jsonb;
+  ntfy_row record;
   picked_body text;
   tips text[] := array[
     'Tip: Rotate or tap +/- for quick sign conversion.',
@@ -142,6 +143,7 @@ declare
 begin
   picked_body := tips[1 + floor(random() * array_length(tips, 1))::int];
 
+  -- 1. Send to native Expo Push devices (Android FCM / paid APNs)
   select jsonb_agg(
     jsonb_build_object(
       'to', t.expo_push_token,
@@ -156,7 +158,8 @@ begin
   )
   into push_payload
   from public.user_push_tokens t
-  where t.user_id <> new.sender_id;
+  where t.user_id <> new.sender_id
+    and t.platform <> 'ntfy';
 
   if push_payload is not null and jsonb_array_length(push_payload) > 0 then
     perform net.http_post(
@@ -165,6 +168,25 @@ begin
       body := push_payload
     );
   end if;
+
+  -- 2. Send to optional private ntfy.sh topics (free closed-app iOS/Android notifications)
+  for ntfy_row in
+    select expo_push_token
+    from public.user_push_tokens
+    where user_id <> new.sender_id
+      and platform = 'ntfy'
+  loop
+    perform net.http_post(
+      url := 'https://ntfy.sh',
+      headers := '{"Content-Type": "application/json"}'::jsonb,
+      body := jsonb_build_object(
+        'topic', ntfy_row.expo_push_token,
+        'title', 'SmartCalc',
+        'message', picked_body,
+        'priority', 4
+      )
+    );
+  end loop;
 
   return new;
 exception
