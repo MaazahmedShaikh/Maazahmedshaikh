@@ -17,6 +17,7 @@
     },
     "android": {
       "package": "com.anonymous.smartcalc",
+      "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#0B141A",

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "357747325602",
+    "project_id": "personal-1376a",
+    "storage_bucket": "personal-1376a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:357747325602:android:5aaddb8239bb9b3a3775fb",
+        "android_client_info": {
+          "package_name": "com.anonymous.smartcalc"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCiYLn6FO8Cg9J_yc4DWMNJ9sYAVkPI-cc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

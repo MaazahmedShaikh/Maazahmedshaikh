@@ -41,3 +41,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Private Firebase service account keys & local credentials
+*firebase-adminsdk*.json
+credentials.json
