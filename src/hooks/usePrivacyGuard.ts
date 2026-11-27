@@ -28,6 +28,7 @@ export function usePrivacyGuard({
   const faceDownTimer = useRef<any>(null);
   const suspendAutoLockRef = useRef(suspendAutoLock);
   const onMaskChangeRef = useRef(onBackgroundStateChange);
+  const leftActiveRef = useRef(AppState.currentState !== 'active');
 
   useEffect(() => {
     suspendAutoLockRef.current = suspendAutoLock;
@@ -46,18 +47,21 @@ export function usePrivacyGuard({
     } catch { }
   }, []);
 
-  // AppState: mask immediately on 'inactive' (before OS captures app-switcher snapshot)
-  // and hard-lock on 'background' (unless suspended for OS photo picker)
+  // AppState: lock immediately to Calculator on BOTH 'inactive' (Home/switcher/lock button on iOS)
+  // and 'background', and re-assert panic lock on 'active' resume in case the OS suspended JS mid-transition.
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
       if (suspendAutoLockRef.current) {
         return;
       }
       if (nextAppState === 'active') {
+        if (leftActiveRef.current) {
+          leftActiveRef.current = false;
+          onPanicLock();
+        }
         onMaskChangeRef.current?.(false);
-      } else if (nextAppState === 'inactive') {
-        onMaskChangeRef.current?.(true);
-      } else if (nextAppState === 'background') {
+      } else {
+        leftActiveRef.current = true;
         onMaskChangeRef.current?.(true);
         onPanicLock();
       }
