@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../lib/supabase';
@@ -24,10 +25,11 @@ import {
   ThreadActivitySummary,
 } from '../lib/memoryCache';
 import { Message, Thread, User } from '../types/database';
-import { whatsappTheme } from '../theme/whatsappTheme';
+import { AppTheme } from '../theme/whatsappTheme';
+import { useAppTheme } from '../theme/ThemeContext';
 import { PinModal } from '../components/PinModal';
 import { StealthSettingsModal } from '../components/StealthSettingsModal';
-import { DEFAULT_STEALTH_CONFIG, StealthConfig } from '../lib/stealthConfig';
+import { DEFAULT_STEALTH_CONFIG, saveStealthConfig, StealthConfig } from '../lib/stealthConfig';
 
 interface VaultListScreenProps {
   currentUser?: User | null;
@@ -56,6 +58,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
   onUpdateStealthConfig,
   isDuressMode = false,
 }) => {
+  const theme = useAppTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
+
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadActivities, setThreadActivities] = useState<Record<string, ThreadActivitySummary>>({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -453,23 +458,84 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
     return `${seconds}s`;
   };
 
+  const totalUnread = Object.values(unreadCounts).reduce((sum, c) => sum + c, 0);
+
+  const handleQuickToggleColorMode = async () => {
+    if (!onUpdateStealthConfig || isDuressMode) return;
+    const nextMode = theme.mode === 'light' ? 'dark' : 'light';
+    const updated = await saveStealthConfig({ ...stealthConfig, themeMode: nextMode });
+    onUpdateStealthConfig(updated);
+  };
+
+  const handleQuickSwitchPreset = async () => {
+    setMenuVisible(false);
+    if (!onUpdateStealthConfig || isDuressMode) return;
+    const nextPreset = theme.preset === 'ice' ? 'whatsapp' : 'ice';
+    const updated = await saveStealthConfig({ ...stealthConfig, themePreset: nextPreset });
+    onUpdateStealthConfig(updated);
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Top Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Chats</Text>
-        <View style={styles.headerRightRow}>
-          <TouchableOpacity style={styles.headerIconBtn} onPress={onLock}>
-            <Ionicons name="lock-closed-outline" size={22} color={whatsappTheme.textSecondary} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.headerIconBtn}
-            onPress={() => setMenuVisible((prev) => !prev)}
-          >
-            <Ionicons name="ellipsis-vertical" size={22} color={whatsappTheme.textSecondary} />
-          </TouchableOpacity>
-        </View>
-      </View>
+    <View style={styles.container}>
+      {/* Gradient Header with Embedded Pill Search Bar */}
+      <LinearGradient
+        colors={[theme.gradientMid, theme.gradientEnd]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.headerGradient}
+      >
+        <SafeAreaView edges={['top']}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>
+              {theme.preset === 'ice' ? 'Messages' : 'Chats'}
+            </Text>
+            <View style={styles.headerRightRow}>
+              {!isDuressMode && onUpdateStealthConfig ? (
+                <TouchableOpacity style={styles.headerIconBtn} onPress={handleQuickToggleColorMode}>
+                  <Ionicons
+                    name={theme.isDark ? 'sunny-outline' : 'moon-outline'}
+                    size={21}
+                    color={theme.headerText}
+                  />
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity style={styles.headerIconBtn} onPress={onLock}>
+                <Ionicons name="lock-closed-outline" size={21} color={theme.headerText} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.headerIconBtn}
+                onPress={() => setMenuVisible((prev) => !prev)}
+              >
+                <Ionicons name="ellipsis-vertical" size={21} color={theme.headerText} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Search Pill inside Gradient Header */}
+          <View style={styles.searchContainer}>
+            <View style={styles.searchPill}>
+              <Ionicons
+                name="search-outline"
+                size={18}
+                color={theme.textSecondary}
+                style={styles.searchIcon}
+              />
+              <TextInput
+                style={styles.searchInput}
+                placeholder={theme.preset === 'whatsapp' ? 'Search...' : 'Search'}
+                placeholderTextColor={theme.textSecondary}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {searchQuery ? (
+                <TouchableOpacity onPress={() => setSearchQuery('')}>
+                  <Ionicons name="close-circle" size={18} color={theme.textSecondary} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+        </SafeAreaView>
+      </LinearGradient>
 
       {/* Overflow Menu */}
       {menuVisible ? (
@@ -481,20 +547,28 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
               setNewChatModalVisible(true);
             }}
           >
-            <Ionicons name="chatbubble-outline" size={18} color={whatsappTheme.textPrimary} />
+            <Ionicons name="chatbubble-outline" size={18} color={theme.textPrimary} />
             <Text style={styles.menuItemText}>New chat</Text>
           </TouchableOpacity>
           {!isDuressMode && onUpdateStealthConfig ? (
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                setMenuVisible(false);
-                setSettingsModalVisible(true);
-              }}
-            >
-              <Ionicons name="shield-outline" size={18} color={whatsappTheme.textPrimary} />
-              <Text style={styles.menuItemText}>Stealth settings</Text>
-            </TouchableOpacity>
+            <>
+              <TouchableOpacity style={styles.menuItem} onPress={handleQuickSwitchPreset}>
+                <Ionicons name="color-palette-outline" size={18} color={theme.textPrimary} />
+                <Text style={styles.menuItemText}>
+                  {theme.preset === 'ice' ? 'WhatsApp Theme' : 'Blue-Violet Ice Theme'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => {
+                  setMenuVisible(false);
+                  setSettingsModalVisible(true);
+                }}
+              >
+                <Ionicons name="shield-outline" size={18} color={theme.textPrimary} />
+                <Text style={styles.menuItemText}>Stealth & Appearance</Text>
+              </TouchableOpacity>
+            </>
           ) : null}
           <TouchableOpacity
             style={styles.menuItem}
@@ -503,54 +577,30 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
               onSignOut();
             }}
           >
-            <Ionicons name="log-out-outline" size={18} color={whatsappTheme.textPrimary} />
+            <Ionicons name="log-out-outline" size={18} color={theme.textPrimary} />
             <Text style={styles.menuItemText}>Sign out</Text>
           </TouchableOpacity>
           <View style={styles.menuDivider} />
           <TouchableOpacity style={styles.menuItem} onPress={handlePanicWipe}>
-            <Ionicons name="trash-outline" size={18} color={whatsappTheme.danger} />
-            <Text style={[styles.menuItemText, { color: whatsappTheme.danger }]}>
+            <Ionicons name="trash-outline" size={18} color={theme.danger} />
+            <Text style={[styles.menuItemText, { color: theme.danger }]}>
               Panic Wipe All Data
             </Text>
           </TouchableOpacity>
         </View>
       ) : null}
 
-      {/* WhatsApp Pill Search Bar */}
-      <View style={styles.searchContainer}>
-        <View style={styles.searchPill}>
-          <Ionicons
-            name="search-outline"
-            size={18}
-            color={whatsappTheme.textSecondary}
-            style={styles.searchIcon}
-          />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Ask Meta AI or Search"
-            placeholderTextColor={whatsappTheme.textSecondary}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-          {searchQuery ? (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={18} color={whatsappTheme.textSecondary} />
-            </TouchableOpacity>
-          ) : null}
-        </View>
-      </View>
-
       {/* Section Header if in Hidden Chats Mode */}
       {isRevealingHidden ? (
         <View style={styles.hiddenHeaderBanner}>
-          <Ionicons name="eye-off" size={18} color={whatsappTheme.accentGreen} />
+          <Ionicons name="eye-off-outline" size={18} color={theme.accentGreen} />
           <Text style={styles.hiddenBannerText}>
             Hidden Chats Revealed ({stealthConfig.hiddenSearchCode})
           </Text>
         </View>
       ) : null}
 
-      {/* Threads List (shows sleek dark-mode skeleton loader during initial fetch) */}
+      {/* Threads List */}
       {loading && threads.length === 0 ? (
         <View style={styles.skeletonList}>
           {[0, 1, 2, 3].map((idx) => (
@@ -619,12 +669,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                 {/* Avatar */}
                 <View style={styles.avatar}>
                   <Text style={styles.avatarText}>{initials || 'C'}</Text>
-                  {/* Timer badge */}
-                  <View style={styles.timerBadge}>
-                    <Text style={styles.timerBadgeText}>
-                      {getTimerLabel(item.disappear_seconds || 60)}
-                    </Text>
-                  </View>
+                  <View style={styles.onlineIndicatorDot} />
                 </View>
 
                 {/* Thread Info */}
@@ -635,17 +680,17 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                     </Text>
                     {item.pin_hash ? (
                       <Ionicons
-                        name="lock-closed"
+                        name="lock-closed-outline"
                         size={14}
-                        color={whatsappTheme.textSecondary}
+                        color={theme.textSecondary}
                         style={{ marginLeft: 6 }}
                       />
                     ) : null}
                     {item.is_hidden ? (
                       <Ionicons
-                        name="eye-off"
+                        name="eye-off-outline"
                         size={14}
-                        color={whatsappTheme.accentGreen}
+                        color={theme.accentGreen}
                         style={{ marginLeft: 6 }}
                       />
                     ) : null}
@@ -653,7 +698,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                   <View style={styles.lastMessageRow}>
                     {unreadCount > 0 ? (
                       <Text
-                        style={[styles.lastMessageText, { color: whatsappTheme.accentGreen, fontWeight: '600' }]}
+                        style={[styles.lastMessageText, { color: theme.accentGreen, fontWeight: '600' }]}
                         numberOfLines={1}
                       >
                         New encrypted message
@@ -663,8 +708,8 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                         {isLastSentByMe ? (
                           <Ionicons
                             name="checkmark-done"
-                            size={16}
-                            color={activity.lastReadAt ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
+                            size={15}
+                            color={activity.lastReadAt ? theme.tickRead : theme.textSecondary}
                             style={{ marginRight: 4 }}
                           />
                         ) : null}
@@ -674,17 +719,9 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                         </Text>
                       </>
                     ) : (
-                      <>
-                        <Ionicons
-                          name="checkmark-done"
-                          size={16}
-                          color={whatsappTheme.tickBlue}
-                          style={{ marginRight: 4 }}
-                        />
-                        <Text style={styles.lastMessageText} numberOfLines={1}>
-                          {item.burn_on_read ? '🔥 Burn after reading' : 'Disappearing chat'}
-                        </Text>
-                      </>
+                      <Text style={styles.lastMessageText} numberOfLines={1}>
+                        {item.burn_on_read ? '🔥 Burn after reading' : `${getTimerLabel(item.disappear_seconds || 60)} disappearing chat`}
+                      </Text>
                     )}
                   </View>
                 </View>
@@ -694,7 +731,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
                   <Text
                     style={[
                       styles.timeText,
-                      unreadCount > 0 && { color: whatsappTheme.accentGreen, fontWeight: '600' },
+                      unreadCount > 0 && { color: theme.accentGreen, fontWeight: '600' },
                     ]}
                   >
                     {safeTime}
@@ -712,25 +749,60 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
           }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Ionicons name="chatbubbles-outline" size={56} color={whatsappTheme.textSecondary} />
+              <Ionicons name="chatbubbles-outline" size={56} color={theme.textSecondary} />
               <Text style={styles.emptyText}>
                 {isRevealingHidden
                   ? 'No hidden chats found'
-                  : 'No conversations yet.\nTap the green button to start a chat.'}
+                  : 'No conversations yet.\nStart a new encrypted chat.'}
               </Text>
             </View>
           }
         />
       )}
 
-      {/* Floating Action Button (New Chat) */}
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.8}
-        onPress={() => setNewChatModalVisible(true)}
-      >
-        <Ionicons name="chatbubble-ellipses" size={24} color="#0B141A" />
-      </TouchableOpacity>
+      {/* Navigation Dock (Ice theme) or Floating Action Button (WhatsApp theme) */}
+      {theme.preset === 'ice' ? (
+        <SafeAreaView edges={['bottom']} style={styles.bottomDockSafe}>
+          <View style={styles.bottomDock}>
+            <TouchableOpacity style={styles.dockItem} activeOpacity={0.7} onPress={fetchThreads}>
+              <View>
+                <Ionicons name="chatbubble-ellipses-outline" size={23} color={theme.accentGreen} />
+                {totalUnread > 0 ? <View style={styles.dockAlertDot} /> : null}
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.dockItem}
+              activeOpacity={0.7}
+              onPress={() => setNewChatModalVisible(true)}
+            >
+              <Ionicons name="add-circle-outline" size={25} color={theme.textSecondary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.dockItem} activeOpacity={0.7} onPress={onLock}>
+              <Ionicons name="lock-closed-outline" size={22} color={theme.textSecondary} />
+            </TouchableOpacity>
+
+            {!isDuressMode && onUpdateStealthConfig ? (
+              <TouchableOpacity
+                style={styles.dockItem}
+                activeOpacity={0.7}
+                onPress={() => setSettingsModalVisible(true)}
+              >
+                <Ionicons name="settings-outline" size={23} color={theme.textSecondary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </SafeAreaView>
+      ) : (
+        <TouchableOpacity
+          style={styles.fab}
+          activeOpacity={0.85}
+          onPress={() => setNewChatModalVisible(true)}
+        >
+          <Ionicons name="chatbubble-ellipses" size={24} color={theme.textOnAccent} />
+        </TouchableOpacity>
+      )}
 
       {/* New Chat Modal */}
       <Modal
@@ -745,7 +817,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
             <TextInput
               style={styles.modalInput}
               placeholder="Chat name or recipient"
-              placeholderTextColor={whatsappTheme.textSecondary}
+              placeholderTextColor={theme.textSecondary}
               value={newChatTitle}
               onChangeText={setNewChatTitle}
               onSubmitEditing={handleCreateThread}
@@ -794,7 +866,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
               <Ionicons
                 name={selectedThread?.is_hidden ? 'eye-outline' : 'eye-off-outline'}
                 size={22}
-                color={whatsappTheme.textPrimary}
+                color={theme.textPrimary}
               />
               <Text style={styles.actionItemText}>
                 {selectedThread?.is_hidden
@@ -804,7 +876,7 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionItem} onPress={promptSetPin}>
-              <Ionicons name="key-outline" size={22} color={whatsappTheme.textPrimary} />
+              <Ionicons name="key-outline" size={22} color={theme.textPrimary} />
               <Text style={styles.actionItemText}>
                 {selectedThread?.pin_hash ? 'Change 4-Digit PIN' : 'Set 4-Digit PIN'}
               </Text>
@@ -812,28 +884,28 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
 
             {selectedThread?.pin_hash ? (
               <TouchableOpacity style={styles.actionItem} onPress={removePin}>
-                <Ionicons name="lock-open-outline" size={22} color={whatsappTheme.textPrimary} />
+                <Ionicons name="lock-open-outline" size={22} color={theme.textPrimary} />
                 <Text style={styles.actionItemText}>Remove PIN Lock</Text>
               </TouchableOpacity>
             ) : null}
 
             <TouchableOpacity style={styles.actionItem} onPress={cycleTimer}>
-              <Ionicons name="timer-outline" size={22} color={whatsappTheme.textPrimary} />
+              <Ionicons name="timer-outline" size={22} color={theme.textPrimary} />
               <Text style={styles.actionItemText}>
                 Timer: {getTimerLabel(selectedThread?.disappear_seconds || 60)} (Tap to cycle)
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionItem} onPress={toggleBurnOnRead}>
-              <Ionicons name="flame-outline" size={22} color={whatsappTheme.textPrimary} />
+              <Ionicons name="flame-outline" size={22} color={theme.textPrimary} />
               <Text style={styles.actionItemText}>
                 Burn on Read: {selectedThread?.burn_on_read ? 'Enabled' : 'Disabled'}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.actionItem} onPress={deleteThread}>
-              <Ionicons name="trash-outline" size={22} color={whatsappTheme.danger} />
-              <Text style={[styles.actionItemText, { color: whatsappTheme.danger }]}>
+              <Ionicons name="trash-outline" size={22} color={theme.danger} />
+              <Text style={[styles.actionItemText, { color: theme.danger }]}>
                 Delete Chat
               </Text>
             </TouchableOpacity>
@@ -867,336 +939,378 @@ export const VaultListScreen: React.FC<VaultListScreenProps> = ({
           onClose={() => setSettingsModalVisible(false)}
         />
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: whatsappTheme.bgPrimary,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    backgroundColor: whatsappTheme.bgPrimary,
-  },
-  headerTitle: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  headerRightRow: {
-    flexDirection: 'row',
-    gap: 16,
-  },
-  headerIconBtn: {
-    padding: 4,
-  },
-  menuDropdown: {
-    position: 'absolute',
-    top: 60,
-    right: 20,
-    backgroundColor: whatsappTheme.bgHeader,
-    borderRadius: 12,
-    paddingVertical: 8,
-    width: 200,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    elevation: 8,
-    zIndex: 99,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  menuItemText: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 15,
-  },
-  menuDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: whatsappTheme.divider,
-    marginVertical: 4,
-  },
-  searchContainer: {
-    paddingHorizontal: 16,
-    paddingBottom: 10,
-  },
-  searchPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: whatsappTheme.bgSearchFocus,
-    borderRadius: 24,
-    paddingHorizontal: 14,
-    height: 44,
-  },
-  searchIcon: {
-    marginRight: 8,
-  },
-  searchInput: {
-    flex: 1,
-    color: whatsappTheme.textPrimary,
-    fontSize: 15,
-  },
-  hiddenHeaderBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0, 168, 132, 0.15)',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    gap: 8,
-  },
-  hiddenBannerText: {
-    color: whatsappTheme.accentGreen,
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  listContent: {
-    paddingVertical: 4,
-  },
-  threadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: whatsappTheme.bgHeader,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  avatarText: {
-    color: whatsappTheme.accentGreen,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  timerBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    backgroundColor: whatsappTheme.accentGreen,
-    borderRadius: 8,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-  },
-  timerBadgeText: {
-    color: '#0B141A',
-    fontSize: 9,
-    fontWeight: '700',
-  },
-  threadMiddle: {
-    flex: 1,
-    justifyContent: 'center',
-  },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  threadTitle: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 17,
-    fontWeight: '600',
-  },
-  lastMessageRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  lastMessageText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 14,
-    flex: 1,
-  },
-  threadRight: {
-    alignItems: 'flex-end',
-    marginLeft: 8,
-  },
-  timeText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 12,
-  },
-  unreadBadge: {
-    marginTop: 5,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: whatsappTheme.accentGreen,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-  },
-  unreadBadgeText: {
-    color: '#0B141A',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 80,
-    gap: 12,
-  },
-  emptyText: {
-    color: whatsappTheme.textSecondary,
-    textAlign: 'center',
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  fab: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: whatsappTheme.accentGreen,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: whatsappTheme.modalOverlay,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: whatsappTheme.bgHeader,
-    borderRadius: 16,
-    padding: 20,
-  },
-  modalTitle: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 16,
-  },
-  modalInput: {
-    backgroundColor: whatsappTheme.bgInputPill,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    height: 48,
-    color: whatsappTheme.textPrimary,
-    fontSize: 15,
-    marginBottom: 20,
-  },
-  modalActionRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 14,
-  },
-  modalCancelBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-  },
-  modalCancelText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  modalCreateBtn: {
-    backgroundColor: whatsappTheme.accentGreen,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-  },
-  modalCreateText: {
-    color: '#0B141A',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  actionSheetOverlay: {
-    flex: 1,
-    backgroundColor: whatsappTheme.modalOverlay,
-    justifyContent: 'flex-end',
-  },
-  actionSheetContent: {
-    backgroundColor: whatsappTheme.bgHeader,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 16,
-    paddingBottom: 36,
-    paddingHorizontal: 20,
-    gap: 6,
-  },
-  actionSheetTitle: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: whatsappTheme.divider,
-    paddingBottom: 10,
-  },
-  actionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingVertical: 12,
-  },
-  actionItemText: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 16,
-  },
-  skeletonList: {
-    flex: 1,
-    paddingTop: 8,
-  },
-  skeletonRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  skeletonAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: whatsappTheme.bgHeader,
-    marginRight: 14,
-  },
-  skeletonMiddle: {
-    flex: 1,
-    gap: 8,
-  },
-  skeletonLinePrimary: {
-    width: '48%',
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: whatsappTheme.bgHeader,
-  },
-  skeletonLineSecondary: {
-    width: '72%',
-    height: 11,
-    borderRadius: 6,
-    backgroundColor: whatsappTheme.surfaceHighlight,
-  },
-  skeletonTime: {
-    width: 42,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: whatsappTheme.bgHeader,
-    marginLeft: 10,
-  },
-});
+const createStyles = (theme: AppTheme) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.bgCard,
+    },
+    headerGradient: {
+      paddingBottom: 16,
+      borderBottomLeftRadius: theme.headerBorderRadius,
+      borderBottomRightRadius: theme.headerBorderRadius,
+    },
+    header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingTop: 8,
+      paddingBottom: 12,
+    },
+    headerTitle: {
+      color: theme.headerText,
+      fontSize: theme.preset === 'ice' ? 28 : 24,
+      fontWeight: '800',
+      letterSpacing: -0.3,
+    },
+    headerRightRow: {
+      flexDirection: 'row',
+      gap: 10,
+    },
+    headerIconBtn: {
+      padding: 6,
+    },
+    menuDropdown: {
+      position: 'absolute',
+      top: 86,
+      right: 20,
+      backgroundColor: theme.bgCard,
+      borderRadius: 14,
+      paddingVertical: 8,
+      width: 224,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: theme.isDark ? 0.35 : 0.14,
+      shadowRadius: 16,
+      elevation: 8,
+      zIndex: 99,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+    },
+    menuItemText: {
+      color: theme.textPrimary,
+      fontSize: 15,
+    },
+    menuDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: theme.divider,
+      marginVertical: 4,
+    },
+    searchContainer: {
+      paddingHorizontal: 18,
+    },
+    searchPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.searchHeaderBg,
+      borderRadius: 22,
+      paddingHorizontal: 14,
+      height: 44,
+    },
+    searchIcon: {
+      marginRight: 8,
+    },
+    searchInput: {
+      flex: 1,
+      color: theme.textPrimary,
+      fontSize: 15,
+    },
+    hiddenHeaderBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.surfaceHighlight,
+      paddingHorizontal: 20,
+      paddingVertical: 8,
+      gap: 8,
+    },
+    hiddenBannerText: {
+      color: theme.accentGreen,
+      fontWeight: '600',
+      fontSize: 13,
+    },
+    listContent: {
+      paddingVertical: 8,
+    },
+    threadRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 18,
+      paddingVertical: 13,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.divider,
+    },
+    avatar: {
+      width: 50,
+      height: 50,
+      borderRadius: 25,
+      backgroundColor: theme.surfaceHighlight,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 14,
+    },
+    avatarText: {
+      color: theme.accentGreen,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    onlineIndicatorDot: {
+      position: 'absolute',
+      bottom: 1,
+      right: 1,
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      backgroundColor: theme.onlineGreen,
+      borderWidth: 2,
+      borderColor: theme.bgCard,
+    },
+    threadMiddle: {
+      flex: 1,
+      justifyContent: 'center',
+    },
+    titleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 4,
+    },
+    threadTitle: {
+      color: theme.textPrimary,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    lastMessageRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    lastMessageText: {
+      color: theme.textSecondary,
+      fontSize: 13.5,
+      flex: 1,
+    },
+    threadRight: {
+      alignItems: 'flex-end',
+      marginLeft: 10,
+    },
+    timeText: {
+      color: theme.textSecondary,
+      fontSize: 12,
+    },
+    unreadBadge: {
+      marginTop: 6,
+      minWidth: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: theme.badgeBg,
+      justifyContent: 'center',
+      alignItems: 'center',
+      paddingHorizontal: 6,
+    },
+    unreadBadgeText: {
+      color: theme.badgeText,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    emptyContainer: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 80,
+      gap: 12,
+    },
+    emptyText: {
+      color: theme.textSecondary,
+      textAlign: 'center',
+      fontSize: 15,
+      lineHeight: 22,
+    },
+    bottomDockSafe: {
+      backgroundColor: theme.bgCard,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.divider,
+    },
+    bottomDock: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      alignItems: 'center',
+      paddingVertical: 10,
+    },
+    dockItem: {
+      paddingHorizontal: 20,
+      paddingVertical: 6,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dockAlertDot: {
+      position: 'absolute',
+      top: -1,
+      right: -3,
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: theme.badgeBg,
+    },
+    fab: {
+      position: 'absolute',
+      bottom: 24,
+      right: 20,
+      width: 56,
+      height: 56,
+      borderRadius: 16,
+      backgroundColor: theme.accentGreen,
+      justifyContent: 'center',
+      alignItems: 'center',
+      elevation: 6,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: theme.modalOverlay,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    modalCard: {
+      width: '100%',
+      maxWidth: 340,
+      backgroundColor: theme.bgCard,
+      borderRadius: 20,
+      padding: 22,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: theme.isDark ? 0.35 : 0.16,
+      shadowRadius: 20,
+      elevation: 10,
+    },
+    modalTitle: {
+      color: theme.textPrimary,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 16,
+    },
+    modalInput: {
+      backgroundColor: theme.bgInputPill,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      height: 48,
+      color: theme.textPrimary,
+      fontSize: 15,
+      marginBottom: 20,
+    },
+    modalActionRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: 14,
+    },
+    modalCancelBtn: {
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+    },
+    modalCancelText: {
+      color: theme.textSecondary,
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    modalCreateBtn: {
+      backgroundColor: theme.accentGreen,
+      borderRadius: 12,
+      paddingVertical: 9,
+      paddingHorizontal: 18,
+    },
+    modalCreateText: {
+      color: theme.textOnAccent,
+      fontSize: 15,
+      fontWeight: '700',
+    },
+    actionSheetOverlay: {
+      flex: 1,
+      backgroundColor: theme.modalOverlay,
+      justifyContent: 'flex-end',
+    },
+    actionSheetContent: {
+      backgroundColor: theme.bgCard,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingTop: 18,
+      paddingBottom: 36,
+      paddingHorizontal: 20,
+      gap: 6,
+    },
+    actionSheetTitle: {
+      color: theme.textPrimary,
+      fontSize: 18,
+      fontWeight: '700',
+      marginBottom: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: theme.divider,
+      paddingBottom: 10,
+    },
+    actionItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 14,
+      paddingVertical: 12,
+    },
+    actionItemText: {
+      color: theme.textPrimary,
+      fontSize: 16,
+    },
+    skeletonList: {
+      flex: 1,
+      paddingTop: 8,
+    },
+    skeletonRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 18,
+      paddingVertical: 14,
+    },
+    skeletonAvatar: {
+      width: 50,
+      height: 50,
+      borderRadius: 25,
+      backgroundColor: theme.surfaceHighlight,
+      marginRight: 14,
+    },
+    skeletonMiddle: {
+      flex: 1,
+      gap: 8,
+    },
+    skeletonLinePrimary: {
+      width: '48%',
+      height: 14,
+      borderRadius: 7,
+      backgroundColor: theme.surfaceHighlight,
+    },
+    skeletonLineSecondary: {
+      width: '72%',
+      height: 11,
+      borderRadius: 6,
+      backgroundColor: theme.bgInputPill,
+    },
+    skeletonTime: {
+      width: 42,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: theme.surfaceHighlight,
+      marginLeft: 10,
+    },
+  });
 

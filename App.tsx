@@ -12,10 +12,12 @@ import {
 import {
   registerExpoPushToken,
   requestNotificationPermission,
+  setActiveChatForPush,
   setSuppressForegroundAlerts,
   triggerDisguisedNotification,
 } from './src/lib/notifications';
 import { clearMemoryCache } from './src/lib/memoryCache';
+import { ThemeProvider } from './src/theme/ThemeContext';
 import { RootScreen, Thread, User } from './src/types/database';
 import { usePrivacyGuard } from './src/hooks/usePrivacyGuard';
 import { CalculatorScreen } from './src/screens/CalculatorScreen';
@@ -70,6 +72,7 @@ export default function App() {
   const [privacyMasked, setPrivacyMasked] = useState(false);
   const currentScreenRef = useRef<RootScreen>(currentScreen);
   const activeThreadIdRef = useRef<string | null>(null);
+  const currentUserIdRef = useRef<string | null>(null);
   const disguisedNotifRef = useRef<boolean>(stealthConfig.disguisedNotifications);
   const suspendAutoLockRef = useRef<boolean>(false);
   const knownUnreadIdsRef = useRef<Set<string>>(new Set());
@@ -80,6 +83,10 @@ export default function App() {
     activeThreadIdRef.current = activeThread?.id ?? null;
     setSuppressForegroundAlerts(currentScreen === 'chat');
   }, [currentScreen, activeThread?.id]);
+
+  useEffect(() => {
+    currentUserIdRef.current = currentUser?.id ?? null;
+  }, [currentUser?.id]);
 
   useEffect(() => {
     disguisedNotifRef.current = stealthConfig.disguisedNotifications;
@@ -99,6 +106,9 @@ export default function App() {
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current);
       inactivityTimerRef.current = null;
+    }
+    if (currentUserIdRef.current) {
+      setActiveChatForPush(currentUserIdRef.current, null);
     }
     clearMemoryCache();
     setSuspendAutoLock(false);
@@ -346,8 +356,9 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <ErrorBoundary>
-          <View style={{ flex: 1 }} onTouchStartCapture={resetInactivityTimer}>
+      <ThemeProvider preset={stealthConfig.themePreset} mode={stealthConfig.themeMode}>
+        <ErrorBoundary>
+            <View style={{ flex: 1 }} onTouchStartCapture={resetInactivityTimer}>
             <StatusBar style="light" />
 
         {currentScreen === 'calculator' && (
@@ -433,6 +444,7 @@ export default function App() {
         )}
           </View>
         </ErrorBoundary>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }

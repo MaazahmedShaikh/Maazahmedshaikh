@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Modal,
   StyleSheet,
@@ -8,7 +8,8 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { whatsappTheme } from '../theme/whatsappTheme';
+import { AppTheme } from '../theme/whatsappTheme';
+import { useAppTheme } from '../theme/ThemeContext';
 
 interface PinModalProps {
   visible: boolean;
@@ -27,6 +28,8 @@ export const PinModal: React.FC<PinModalProps> = ({
   onCancel,
   errorMessage,
 }) => {
+  const theme = useAppTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [pin, setPin] = useState('');
 
   const handlePressDigit = (digit: string) => {
@@ -68,7 +71,7 @@ export const PinModal: React.FC<PinModalProps> = ({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.headerRow}>
-            <Ionicons name="lock-closed" size={24} color={whatsappTheme.accentGreen} />
+            <Ionicons name="lock-closed" size={24} color={theme.accentGreen} />
             <Text style={styles.title}>{title}</Text>
           </View>
           <Text style={styles.subtitle}>{subtitle}</Text>
@@ -125,7 +128,7 @@ export const PinModal: React.FC<PinModalProps> = ({
                         <Ionicons
                           name="backspace-outline"
                           size={24}
-                          color={whatsappTheme.textSecondary}
+                          color={theme.textSecondary}
                         />
                       </TouchableOpacity>
                     );
@@ -149,104 +152,106 @@ export const PinModal: React.FC<PinModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: whatsappTheme.modalOverlay,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 360,
-    backgroundColor: whatsappTheme.bgHeader,
-    borderRadius: 20,
-    padding: 24,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  title: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 20,
-    fontWeight: '700',
-    marginLeft: 8,
-  },
-  subtitle: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 14,
-    textAlign: 'center',
-    marginBottom: 20,
-  },
-  dotsRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 16,
-    marginBottom: 16,
-  },
-  dot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    borderWidth: 2,
-    borderColor: whatsappTheme.textSecondary,
-    backgroundColor: 'transparent',
-  },
-  dotFilled: {
-    backgroundColor: whatsappTheme.accentGreen,
-    borderColor: whatsappTheme.accentGreen,
-  },
-  dotError: {
-    borderColor: whatsappTheme.danger,
-    backgroundColor: whatsappTheme.danger,
-  },
-  errorText: {
-    color: whatsappTheme.danger,
-    fontSize: 13,
-    marginBottom: 12,
-  },
-  keypad: {
-    width: '100%',
-    marginTop: 8,
-  },
-  keypadRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  keyButton: {
-    width: 72,
-    height: 64,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  digitButton: {
-    width: 72,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: whatsappTheme.bgSearchFocus,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  digitText: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 24,
-    fontWeight: '600',
-  },
-  cancelText: {
-    color: whatsappTheme.danger,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-});
-
+const createStyles = (theme: AppTheme) =>
+  StyleSheet.create({
+    overlay: {
+      flex: 1,
+      backgroundColor: theme.modalOverlay,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 360,
+      backgroundColor: theme.bgCard,
+      borderRadius: 24,
+      padding: 24,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: theme.isDark ? 0.4 : 0.16,
+      shadowRadius: 20,
+      elevation: 10,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    title: {
+      color: theme.textPrimary,
+      fontSize: 20,
+      fontWeight: '700',
+      marginLeft: 8,
+    },
+    subtitle: {
+      color: theme.textSecondary,
+      fontSize: 14,
+      textAlign: 'center',
+      marginBottom: 20,
+    },
+    dotsRow: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 16,
+      marginBottom: 16,
+    },
+    dot: {
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      borderWidth: 2,
+      borderColor: theme.textSecondary,
+      backgroundColor: 'transparent',
+    },
+    dotFilled: {
+      backgroundColor: theme.accentGreen,
+      borderColor: theme.accentGreen,
+    },
+    dotError: {
+      borderColor: theme.danger,
+      backgroundColor: theme.danger,
+    },
+    errorText: {
+      color: theme.danger,
+      fontSize: 13,
+      marginBottom: 12,
+    },
+    keypad: {
+      width: '100%',
+      marginTop: 8,
+    },
+    keypadRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginBottom: 12,
+    },
+    keyButton: {
+      width: 72,
+      height: 64,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    digitButton: {
+      width: 72,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: theme.bgInputPill,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    digitText: {
+      color: theme.textPrimary,
+      fontSize: 24,
+      fontWeight: '600',
+    },
+    cancelText: {
+      color: theme.danger,
+      fontSize: 15,
+      fontWeight: '600',
+    },
+  });

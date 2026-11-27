@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ThemeMode, ThemePreset } from '../theme/whatsappTheme';
 
 const CONFIG_STORAGE_KEY = 'smartcalc_display_prefs_v1';
 
@@ -14,6 +15,8 @@ export interface StealthConfig {
   disguisedNotifications: boolean;
   motionAutoLock: boolean;
   inactivityTimeoutSeconds: InactivityTimeout;
+  themePreset: ThemePreset;
+  themeMode: ThemeMode;
 }
 
 export const DEFAULT_STEALTH_CONFIG: StealthConfig = {
@@ -25,10 +28,12 @@ export const DEFAULT_STEALTH_CONFIG: StealthConfig = {
   disguisedNotifications: true,
   motionAutoLock: true,
   inactivityTimeoutSeconds: 60,
+  themePreset: 'ice',
+  themeMode: 'light',
 };
 
 /**
- * Loads user-configurable stealth codes from AsyncStorage, falling back to defaults.
+ * Loads user-configurable stealth codes & appearance prefs from AsyncStorage.
  */
 export async function loadStealthConfig(): Promise<StealthConfig> {
   try {
@@ -48,6 +53,8 @@ export async function loadStealthConfig(): Promise<StealthConfig> {
       motionAutoLock:
         typeof parsed.motionAutoLock === 'boolean' ? parsed.motionAutoLock : true,
       inactivityTimeoutSeconds: sanitizeInactivity(parsed.inactivityTimeoutSeconds),
+      themePreset: parsed.themePreset === 'whatsapp' ? 'whatsapp' : 'ice',
+      themeMode: parsed.themeMode === 'dark' ? 'dark' : 'light',
     };
   } catch {
     return DEFAULT_STEALTH_CONFIG;
@@ -55,7 +62,7 @@ export async function loadStealthConfig(): Promise<StealthConfig> {
 }
 
 /**
- * Persists updated stealth codes to AsyncStorage.
+ * Persists updated stealth codes & appearance prefs to AsyncStorage.
  */
 export async function saveStealthConfig(config: StealthConfig): Promise<StealthConfig> {
   const sanitized: StealthConfig = {
@@ -67,6 +74,8 @@ export async function saveStealthConfig(config: StealthConfig): Promise<StealthC
     disguisedNotifications: Boolean(config.disguisedNotifications),
     motionAutoLock: Boolean(config.motionAutoLock),
     inactivityTimeoutSeconds: sanitizeInactivity(config.inactivityTimeoutSeconds),
+    themePreset: config.themePreset === 'whatsapp' ? 'whatsapp' : 'ice',
+    themeMode: config.themeMode === 'dark' ? 'dark' : 'light',
   };
 
   await AsyncStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(sanitized));

@@ -31,8 +31,14 @@ create table if not exists public.user_push_tokens (
   user_id uuid not null,
   expo_push_token text not null unique,
   platform text not null,
+  active_thread_id uuid,
+  active_until timestamptz,
   updated_at timestamptz default now()
 );
+
+-- Ensure active-chat suppression columns exist on already-provisioned tables
+alter table public.user_push_tokens add column if not exists active_thread_id uuid;
+alter table public.user_push_tokens add column if not exists active_until timestamptz;
 
 -- Performance indexes to prevent full table scans & minimize Postgres RAM usage
 create index if not exists idx_messages_thread_expires_created
@@ -169,6 +175,11 @@ begin
     from public.user_push_tokens as t
     where t.user_id <> new.sender_id
       and t.platform <> 'ntfy'
+      and not (
+        t.active_thread_id = new.thread_id
+        and t.active_until is not null
+        and t.active_until > now()
+      )
   );
 
   if v_push_payload is not null and jsonb_array_length(v_push_payload) > 0 then
@@ -185,6 +196,11 @@ begin
     from public.user_push_tokens as t
     where t.user_id <> new.sender_id
       and t.platform = 'ntfy'
+      and not (
+        t.active_thread_id = new.thread_id
+        and t.active_until is not null
+        and t.active_until > now()
+      )
   loop
     perform net.http_post(
       url := 'https://ntfy.sh',

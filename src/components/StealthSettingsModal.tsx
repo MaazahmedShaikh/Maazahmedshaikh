@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -18,7 +18,7 @@ import {
   StealthConfig,
 } from '../lib/stealthConfig';
 import { triggerDisguisedNotification } from '../lib/notifications';
-import { whatsappTheme } from '../theme/whatsappTheme';
+import { AppTheme, getTheme, ThemeMode, ThemePreset } from '../theme/whatsappTheme';
 
 interface StealthSettingsModalProps {
   visible: boolean;
@@ -44,6 +44,12 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
   const [motionAutoLock, setMotionAutoLock] = useState(config.motionAutoLock);
   const [inactivityTimeoutSeconds, setInactivityTimeoutSeconds] =
     useState<InactivityTimeout>(config.inactivityTimeoutSeconds);
+  const [themePreset, setThemePreset] = useState<ThemePreset>(config.themePreset || 'ice');
+  const [themeMode, setThemeMode] = useState<ThemeMode>(config.themeMode || 'light');
+
+  // Preview the chosen preset/mode live inside the settings modal
+  const theme = useMemo(() => getTheme(themePreset, themeMode), [themePreset, themeMode]);
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   const handleSave = async () => {
     const codes = [vaultCode, decoyNotesCode, duressCode];
@@ -68,6 +74,8 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
       disguisedNotifications,
       motionAutoLock,
       inactivityTimeoutSeconds,
+      themePreset,
+      themeMode,
     });
     onSave(updated);
     onClose();
@@ -78,13 +86,75 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
       <View style={styles.overlay}>
         <View style={styles.card}>
           <View style={styles.header}>
-            <Text style={styles.title}>Stealth & Security</Text>
+            <Text style={styles.title}>Stealth & Appearance</Text>
             <TouchableOpacity onPress={onClose}>
-              <Ionicons name="close" size={24} color={whatsappTheme.textSecondary} />
+              <Ionicons name="close" size={24} color={theme.textSecondary} />
             </TouchableOpacity>
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false}>
+            <Text style={styles.sectionLabel}>Messenger Theme</Text>
+            <View style={styles.duressRow}>
+              <TouchableOpacity
+                style={[styles.duressOption, themePreset === 'ice' && styles.duressOptionActive]}
+                onPress={() => setThemePreset('ice')}
+              >
+                <Text
+                  style={[
+                    styles.duressOptionText,
+                    themePreset === 'ice' && styles.duressOptionTextActive,
+                  ]}
+                >
+                  Blue-Violet Ice
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.duressOption,
+                  themePreset === 'whatsapp' && styles.duressOptionActive,
+                ]}
+                onPress={() => setThemePreset('whatsapp')}
+              >
+                <Text
+                  style={[
+                    styles.duressOptionText,
+                    themePreset === 'whatsapp' && styles.duressOptionTextActive,
+                  ]}
+                >
+                  WhatsApp Classic
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.duressRow, { marginTop: 8 }]}>
+              <TouchableOpacity
+                style={[styles.duressOption, themeMode === 'light' && styles.duressOptionActive]}
+                onPress={() => setThemeMode('light')}
+              >
+                <Text
+                  style={[
+                    styles.duressOptionText,
+                    themeMode === 'light' && styles.duressOptionTextActive,
+                  ]}
+                >
+                  ☀ Light Mode
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.duressOption, themeMode === 'dark' && styles.duressOptionActive]}
+                onPress={() => setThemeMode('dark')}
+              >
+                <Text
+                  style={[
+                    styles.duressOptionText,
+                    themeMode === 'dark' && styles.duressOptionTextActive,
+                  ]}
+                >
+                  🌙 Dark Mode
+                </Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={styles.sectionLabel}>Calculator Access Codes (trigger with =)</Text>
 
             <View style={styles.fieldRow}>
@@ -178,7 +248,7 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
               <Switch
                 value={disguisedNotifications}
                 onValueChange={setDisguisedNotifications}
-                trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
+                trackColor={{ false: theme.divider, true: theme.accentGreen }}
               />
             </View>
 
@@ -192,7 +262,7 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
               <Switch
                 value={motionAutoLock}
                 onValueChange={setMotionAutoLock}
-                trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
+                trackColor={{ false: theme.divider, true: theme.accentGreen }}
               />
             </View>
 
@@ -224,13 +294,13 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
               style={styles.testNotifBtn}
               onPress={() => triggerDisguisedNotification()}
             >
-              <Ionicons name="notifications-outline" size={16} color={whatsappTheme.accentGreen} />
+              <Ionicons name="notifications-outline" size={16} color={theme.accentGreen} />
               <Text style={styles.testNotifText}>Send Test Disguised Alert</Text>
             </TouchableOpacity>
           </ScrollView>
 
           <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-            <Text style={styles.saveBtnText}>Save Stealth Settings</Text>
+            <Text style={styles.saveBtnText}>Save Settings</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -238,126 +308,136 @@ export const StealthSettingsModal: React.FC<StealthSettingsModalProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  card: {
-    backgroundColor: whatsappTheme.bgHeader,
-    borderRadius: 16,
-    padding: 20,
-    maxHeight: '85%',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  title: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  sectionLabel: {
-    color: whatsappTheme.accentGreen,
-    fontSize: 12,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    marginTop: 14,
-    marginBottom: 8,
-  },
-  fieldRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: whatsappTheme.divider,
-  },
-  fieldLabel: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  codeInput: {
-    backgroundColor: whatsappTheme.bgPrimary,
-    color: whatsappTheme.textPrimary,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    width: 96,
-    textAlign: 'center',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  duressRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-  },
-  duressOption: {
-    flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    backgroundColor: whatsappTheme.bgPrimary,
-    alignItems: 'center',
-  },
-  duressOptionActive: {
-    backgroundColor: whatsappTheme.accentGreen,
-  },
-  duressOptionDanger: {
-    backgroundColor: whatsappTheme.danger,
-  },
-  duressOptionText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  duressOptionTextActive: {
-    color: '#0B141A',
-  },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 4,
-  },
-  helperText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 12,
-    marginTop: 2,
-  },
-  testNotifBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    marginTop: 12,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: whatsappTheme.accentGreen,
-  },
-  testNotifText: {
-    color: whatsappTheme.accentGreen,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  saveBtn: {
-    backgroundColor: whatsappTheme.accentGreen,
-    borderRadius: 10,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  saveBtnText: {
-    color: '#0B141A',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-});
+const createStyles = (theme: AppTheme) =>
+  StyleSheet.create({
+    overlay: {
+      flex: 1,
+      backgroundColor: theme.modalOverlay,
+      justifyContent: 'center',
+      padding: 20,
+    },
+    card: {
+      backgroundColor: theme.bgCard,
+      borderRadius: 22,
+      padding: 20,
+      maxHeight: '85%',
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: 0.2,
+      shadowRadius: 20,
+      elevation: 10,
+    },
+    header: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 14,
+    },
+    title: {
+      color: theme.textPrimary,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    sectionLabel: {
+      color: theme.accentGreen,
+      fontSize: 12,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      marginTop: 14,
+      marginBottom: 8,
+    },
+    fieldRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.divider,
+    },
+    fieldLabel: {
+      color: theme.textPrimary,
+      fontSize: 14,
+      fontWeight: '500',
+    },
+    codeInput: {
+      backgroundColor: theme.bgInputPill,
+      color: theme.textPrimary,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      width: 96,
+      textAlign: 'center',
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    duressRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginTop: 4,
+    },
+    duressOption: {
+      flex: 1,
+      paddingVertical: 10,
+      paddingHorizontal: 8,
+      borderRadius: 10,
+      backgroundColor: theme.bgInputPill,
+      alignItems: 'center',
+    },
+    duressOptionActive: {
+      backgroundColor: theme.accentGreen,
+    },
+    duressOptionDanger: {
+      backgroundColor: theme.danger,
+    },
+    duressOptionText: {
+      color: theme.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    duressOptionTextActive: {
+      color: theme.textOnAccent,
+    },
+    switchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: 4,
+    },
+    helperText: {
+      color: theme.textSecondary,
+      fontSize: 12,
+      marginTop: 2,
+    },
+    testNotifBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      marginTop: 14,
+      paddingVertical: 10,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: theme.accentGreen,
+    },
+    testNotifText: {
+      color: theme.accentGreen,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    saveBtn: {
+      backgroundColor: theme.accentGreen,
+      borderRadius: 14,
+      paddingVertical: 14,
+      alignItems: 'center',
+      marginTop: 16,
+    },
+    saveBtnText: {
+      color: theme.textOnAccent,
+      fontSize: 15,
+      fontWeight: '700',
+    },
+  });

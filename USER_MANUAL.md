@@ -14,7 +14,7 @@ SmartCalc is a cross-platform (Android & iOS) encrypted messaging app disguised 
 | **Chats Search Bar** | `9999` | Reveals **Hidden Chats** |
 | **Android Phone Dialer** | `*#*#7391#*#*` | Launches SmartCalc directly *(standalone Android APK only)* |
 
-> **Tip:** All 4 codes above (`7391`, `0000`, `9111`, `9999`) can be customized anytime under **`⋮` > Stealth settings**. All normal calculator math (`+`, `-`, `×`, `÷`, `%`, `+/-`, `.`) works normally.
+> **Tip:** All 4 codes above (`7391`, `0000`, `9111`, `9999`) and your Messenger appearance (**Blue-Violet Ice** or **WhatsApp Classic**, in **Light Mode** or **Dark Mode**) can be customized anytime under **`⋮` > Stealth & Appearance** (or toggle Light/Dark with 1 tap using the Sun/Moon icon in the header). All normal calculator math (`+`, `-`, `×`, `÷`, `%`, `+/-`, `.`) works normally.
 
 ---
 
@@ -50,7 +50,7 @@ Press and hold any conversation in the **Chats** list to open its options:
 * **Hide / Unhide Chat:** Removes the chat from the main list. Type **`9999`** in the search bar to reveal hidden chats.
 * **Set / Remove 4-Digit PIN:** Protects that specific chat with a 4-digit SHA-256 hashed PIN.
   * *Anti-Intrusion Lockout:* **3 wrong PIN attempts** trigger a **1-hour lockout** and return to the calculator.
-* **Disappear Timer (Timed Mode):** Cycle message expiration between **`10s`**, **`1m`**, **`1h`**, and **`24h`** from the time sent (turns off Burn on Read).
+* **Disappear Timer (Timed Mode):** Cycle message expiration between **`10s`**, **`1m`**, **`1h`**, and **`24h`** starting **after** the recipient reads the message (never deletes unread messages while the recipient is offline).
 * **Burn on Read (Default ON):** Messages wait safely while the recipient is offline/inactive (up to 7 days), then trigger an **8-second countdown** and permanently delete as soon as the recipient reads them.
 * **Delete Chat:** Permanently deletes the conversation and all its messages.
 

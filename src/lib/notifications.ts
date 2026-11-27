@@ -110,6 +110,25 @@ export async function registerExpoPushToken(userId: string): Promise<string | nu
 }
 
 /**
+ * Marks which thread (if any) the user currently has actively open in foreground,
+ * so backend pg_net push triggers (ntfy & Expo Push) stay silent while chatting inside that thread.
+ */
+export async function setActiveChatForPush(
+  userId: string,
+  threadId: string | null
+): Promise<void> {
+  try {
+    const activeUntil = threadId ? new Date(Date.now() + 35000).toISOString() : null;
+    await supabase
+      .from('user_push_tokens')
+      .update({ active_thread_id: threadId, active_until: activeUntil })
+      .eq('user_id', userId);
+  } catch {
+    // Ignore transient network errors
+  }
+}
+
+/**
  * Fires a harmless, disguised local notification with zero sender/message info.
  */
 export async function triggerDisguisedNotification(): Promise<void> {

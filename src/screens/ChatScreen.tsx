@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   FlatList,
   Image,
   Keyboard,
@@ -20,12 +21,14 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { supabase } from '../lib/supabase';
+import { setActiveChatForPush } from '../lib/notifications';
 import { decryptMessage, encryptMessage } from '../lib/cryptoCodec';
 import {
   decodeMessagePayload,
@@ -41,7 +44,8 @@ import {
 } from '../lib/memoryCache';
 import { Message, Thread, User } from '../types/database';
 import { getThreadDisplayTitle } from '../lib/directChat';
-import { whatsappTheme } from '../theme/whatsappTheme';
+import { AppTheme } from '../theme/whatsappTheme';
+import { useAppTheme } from '../theme/ThemeContext';
 
 const QUICK_EMOJIS = [
   '😀', '😂', '😍', '🥰', '😘', '😊', '🤔', '😭',
@@ -74,8 +78,10 @@ interface DecryptedMessage extends Message {
 const SwipeableMessageBubble: React.FC<{
   message: DecryptedMessage;
   onSwipeReply: (msg: DecryptedMessage) => void;
+  hintStyle: any;
   children: React.ReactNode;
-}> = ({ message, onSwipeReply, children }) => {
+}> = ({ message, onSwipeReply, hintStyle, children }) => {
+  const theme = useAppTheme();
   const [translateX] = useState(() => new Animated.Value(0));
 
   const panResponder = useMemo(
@@ -121,9 +127,9 @@ const SwipeableMessageBubble: React.FC<{
     <View style={{ position: 'relative' }} {...panResponder.panHandlers}>
       <Animated.View
         pointerEvents="none"
-        style={[styles.swipeReplyHint, { opacity: iconOpacity }]}
+        style={[hintStyle, { opacity: iconOpacity }]}
       >
-        <Ionicons name="arrow-undo" size={18} color={whatsappTheme.accentGreen} />
+        <Ionicons name="arrow-undo" size={18} color={theme.accentGreen} />
       </Animated.View>
       <Animated.View style={{ transform: [{ translateX }] }}>{children}</Animated.View>
     </View>
@@ -139,6 +145,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   onBack,
   onLock,
 }) => {
+  const theme = useAppTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const [messages, setMessages] = useState<DecryptedMessage[]>(() =>
     getCachedThreadMessages(thread.id)
   );
@@ -212,27 +220,46 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
     []
   );
 
-  // Burn on read (receiver): mark read_at & shorten expires_at to 8s in Supabase so it waits while offline,
-  // syncs countdown to sender, and gets purged even if receiver closes the app before 8s finishes.
+  // Starts burn timer ONLY when recipient actively views the chat in foreground ('active').
+  // Unread messages remain safely queued (up to 7 days) regardless of whether Burn (8s) or 10s/1m/1h/24h is chosen.
   const handleIncomingBurn = useCallback(
-    async (messageId: string) => {
-      if (burningIdsRef.current.has(messageId)) return;
-      startBurnCountdown(messageId, 8, true);
+    async (msg: Message) => {
+      if (AppState.currentState !== 'active') return;
+      if (burningIdsRef.current.has(msg.id)) return;
+
+      if (msg.read_at) {
+        const remaining = Math.max(
+          1,
+          Math.ceil((new Date(msg.expires_at).getTime() - Date.now()) / 1000)
+        );
+        startBurnCountdown(msg.id, remaining, true);
+        return;
+      }
+
+      const burnSeconds = thread.burn_on_read ? 8 : thread.disappear_seconds || 60;
       const nowMs = Date.now();
       const readAt = new Date(nowMs).toISOString();
-      const burnExpiresAt = new Date(nowMs + 8000).toISOString();
+      const burnExpiresAt = new Date(nowMs + burnSeconds * 1000).toISOString();
+
+      startBurnCountdown(msg.id, burnSeconds, true);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msg.id ? { ...m, read_at: readAt, expires_at: burnExpiresAt } : m
+        )
+      );
+
       await supabase
         .from('messages')
         .update({ read_at: readAt, expires_at: burnExpiresAt })
-        .eq('id', messageId);
+        .eq('id', msg.id);
 
       channelRef.current?.send({
         type: 'broadcast',
         event: 'read_msg',
-        payload: { id: messageId, read_at: readAt },
+        payload: { id: msg.id, read_at: readAt, expires_at: burnExpiresAt },
       });
     },
-    [startBurnCountdown]
+    [startBurnCountdown, thread.burn_on_read, thread.disappear_seconds]
   );
 
   // Clean up all burn timers and typing timers on unmount
@@ -246,6 +273,33 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       }
     };
   }, []);
+
+  // Suppress backend push alerts (ntfy & Expo Push) while this chat is actively open in foreground
+  useEffect(() => {
+    if (AppState.currentState === 'active') {
+      setActiveChatForPush(currentUserId, thread.id);
+    }
+
+    const heartbeat = setInterval(() => {
+      if (AppState.currentState === 'active') {
+        setActiveChatForPush(currentUserId, thread.id);
+      }
+    }, 20000);
+
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        setActiveChatForPush(currentUserId, thread.id);
+      } else {
+        setActiveChatForPush(currentUserId, null);
+      }
+    });
+
+    return () => {
+      clearInterval(heartbeat);
+      appStateSub.remove();
+      setActiveChatForPush(currentUserId, null);
+    };
+  }, [currentUserId, thread.id]);
 
   // Self-calibrating keyboard listener (handles Android edge-to-edge & scrolls to bottom)
   useEffect(() => {
@@ -340,18 +394,18 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     setInitialLoading(false);
 
-    if (thread.burn_on_read) {
-      decryptedRows.forEach((m) => {
-        if (m.sender_id !== currentUserId) {
-          handleIncomingBurn(m.id);
-        } else if (m.read_at) {
-          const elapsed = Math.floor((Date.now() - new Date(m.read_at).getTime()) / 1000);
-          const remaining = Math.max(1, 8 - elapsed);
-          startBurnCountdown(m.id, remaining, false);
-        }
-      });
-    }
-  }, [thread.id, thread.burn_on_read, currentUserId, decryptCached, handleIncomingBurn, startBurnCountdown]);
+    decryptedRows.forEach((m) => {
+      if (m.sender_id !== currentUserId) {
+        handleIncomingBurn(m);
+      } else if (m.read_at) {
+        const remaining = Math.max(
+          1,
+          Math.ceil((new Date(m.expires_at).getTime() - Date.now()) / 1000)
+        );
+        startBurnCountdown(m.id, remaining, false);
+      }
+    });
+  }, [thread.id, currentUserId, decryptCached, handleIncomingBurn, startBurnCountdown]);
 
   const handleLoadEarlier = async () => {
     if (loadingOlder) return;
@@ -380,8 +434,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         );
       });
 
-      if (rawMsg.sender_id !== currentUserId && thread.burn_on_read) {
-        handleIncomingBurn(rawMsg.id);
+      if (rawMsg.sender_id !== currentUserId) {
+        handleIncomingBurn(decryptedMsg);
       }
     };
 
@@ -412,15 +466,15 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           })
       );
 
-      if (thread.burn_on_read) {
-        typedMeta.forEach((meta) => {
-          if (meta.sender_id === currentUserId && meta.read_at) {
-            const elapsed = Math.floor((Date.now() - new Date(meta.read_at).getTime()) / 1000);
-            const remaining = Math.max(1, 8 - elapsed);
-            startBurnCountdown(meta.id, remaining, false);
-          }
-        });
-      }
+      typedMeta.forEach((meta) => {
+        if (meta.sender_id === currentUserId && meta.read_at) {
+          const remaining = Math.max(
+            1,
+            Math.ceil((new Date(meta.expires_at).getTime() - Date.now()) / 1000)
+          );
+          startBurnCountdown(meta.id, remaining, false);
+        }
+      });
 
       if (missingIds.length > 0) {
         const { data: missingRows } = await supabase
@@ -479,12 +533,21 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         }
       })
       .on('broadcast', { event: 'read_msg' }, ({ payload }) => {
-        if (payload?.id && payload?.read_at && thread.burn_on_read) {
+        if (payload?.id && payload?.read_at) {
           setMessages((prev) =>
-            prev.map((m) => (m.id === payload.id ? { ...m, read_at: payload.read_at } : m))
+            prev.map((m) =>
+              m.id === payload.id
+                ? {
+                    ...m,
+                    read_at: payload.read_at,
+                    expires_at: payload.expires_at || m.expires_at,
+                  }
+                : m
+            )
           );
-          const elapsed = Math.floor((Date.now() - new Date(payload.read_at).getTime()) / 1000);
-          const remaining = Math.max(1, 8 - elapsed);
+          const remaining = payload.expires_at
+            ? Math.max(1, Math.ceil((new Date(payload.expires_at).getTime() - Date.now()) / 1000))
+            : Math.max(1, 8 - Math.floor((Date.now() - new Date(payload.read_at).getTime()) / 1000));
           startBurnCountdown(payload.id, remaining, false);
         }
       })
@@ -513,10 +576,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               )
             );
 
-            // Sync burn countdown on sender screen when recipient marks read_at
-            if (updated.read_at && updated.sender_id === currentUserId && thread.burn_on_read) {
-              const elapsed = Math.floor((Date.now() - new Date(updated.read_at).getTime()) / 1000);
-              const remaining = Math.max(1, 8 - elapsed);
+            // Sync countdown on sender screen when recipient marks read_at
+            if (updated.read_at && updated.sender_id === currentUserId) {
+              const remaining = Math.max(
+                1,
+                Math.ceil((new Date(updated.expires_at).getTime() - Date.now()) / 1000)
+              );
               startBurnCountdown(updated.id, remaining, false);
             }
           }
@@ -544,15 +609,25 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
 
     channelRef.current = channel;
 
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        messagesRef.current.forEach((m) => {
+          if (m.sender_id !== currentUserId) {
+            handleIncomingBurn(m);
+          }
+        });
+      }
+    });
+
     return () => {
       mounted = false;
       clearInterval(syncTimer);
+      appStateSub.remove();
       channelRef.current = null;
       supabase.removeChannel(channel);
     };
   }, [
     thread.id,
-    thread.burn_on_read,
     currentUserId,
     decryptCached,
     handleIncomingBurn,
@@ -608,11 +683,10 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
       channelRef.current?.track({ online: true, typing: false }).catch(() => {});
     }
 
-    const disappearSecs = thread.disappear_seconds || 60;
     const nowMs = Date.now();
     const nowIso = new Date(nowMs).toISOString();
-    // If burn_on_read is ON, keep unread message queued up to 7 days until recipient actually reads it
-    const ttlMs = thread.burn_on_read ? 7 * 86400 * 1000 : disappearSecs * 1000;
+    // Keep EVERY unread message queued up to 7 days until recipient actively reads it
+    const ttlMs = 7 * 86400 * 1000;
     const expiresAt = new Date(nowMs + ttlMs).toISOString();
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -869,9 +943,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
   };
 
   return (
-    <SafeAreaView
+    <View
       style={styles.container}
-      edges={['top', 'bottom']}
       onLayout={(e: LayoutChangeEvent) => {
         const h = e.nativeEvent.layout.height;
         latestLayoutHeightRef.current = h;
@@ -884,51 +957,58 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
         }
       }}
     >
-      {/* Top Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
-          <Ionicons name="arrow-back" size={24} color={whatsappTheme.textPrimary} />
-        </TouchableOpacity>
+      {/* Dynamic Header Gradient (Blue-Violet Ice or Classic WhatsApp) */}
+      <LinearGradient
+        colors={[theme.gradientMid, theme.gradientEnd]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+      >
+        <SafeAreaView edges={['top']}>
+          <View style={styles.header}>
+            <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+              <Ionicons name="chevron-back" size={26} color={theme.headerText} />
+            </TouchableOpacity>
 
-        <View style={styles.headerAvatar}>
-          <Text style={styles.headerAvatarText}>{initials || 'C'}</Text>
-          {partnerOnline ? <View style={styles.onlineDot} /> : null}
-        </View>
-
-        <TouchableOpacity
-          style={styles.headerInfo}
-          activeOpacity={0.7}
-          onPress={() => setTimerModalVisible(true)}
-        >
-          <Text style={styles.headerTitle} numberOfLines={1}>
-            {safeTitle}
-          </Text>
-          <View style={styles.headerSubRow}>
-            {partnerTyping ? (
-              <Text style={[styles.headerSubtitle, { color: whatsappTheme.accentGreen, fontWeight: '600' }]}>
-                typing...
+            <TouchableOpacity
+              style={styles.headerInfo}
+              activeOpacity={0.7}
+              onPress={() => setTimerModalVisible(true)}
+            >
+              <Text style={styles.headerTitle} numberOfLines={1}>
+                {safeTitle}
               </Text>
-            ) : (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 }}>
-                <Text style={styles.headerSubtitle} numberOfLines={1}>
-                  {partnerOnline ? 'online • ' : ''}
-                  {lastActivityLabel ? `${lastActivityLabel} • ` : ''}
-                  {thread.burn_on_read
-                    ? '🔥 Burn (8s)'
-                    : `⏱ ${formatTimerLabel(thread.disappear_seconds || 60)}`}
-                </Text>
-                <Ionicons name="chevron-down" size={12} color={whatsappTheme.textSecondary} />
+              <View style={styles.headerSubRow}>
+                {partnerTyping ? (
+                  <Text style={[styles.headerSubtitle, { color: theme.headerText, fontWeight: '700' }]}>
+                    typing...
+                  </Text>
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1 }}>
+                    <Text style={styles.headerSubtitle} numberOfLines={1}>
+                      {partnerOnline ? 'online • ' : ''}
+                      {lastActivityLabel ? `${lastActivityLabel} • ` : ''}
+                      {thread.burn_on_read
+                        ? '🔥 Burn (8s)'
+                        : `⏱ ${formatTimerLabel(thread.disappear_seconds || 60)}`}
+                    </Text>
+                    <Ionicons name="chevron-down" size={12} color={theme.headerSubtext} />
+                  </View>
+                )}
               </View>
-            )}
-          </View>
-        </TouchableOpacity>
+            </TouchableOpacity>
 
-        <View style={styles.headerRight}>
-          <TouchableOpacity style={styles.headerIconBtn} onPress={onLock}>
-            <Ionicons name="lock-closed-outline" size={20} color={whatsappTheme.textSecondary} />
-          </TouchableOpacity>
-        </View>
-      </View>
+            <View style={styles.headerRight}>
+              <View style={styles.headerAvatar}>
+                <Text style={styles.headerAvatarText}>{initials || 'C'}</Text>
+                {partnerOnline ? <View style={styles.onlineDot} /> : null}
+              </View>
+              <TouchableOpacity style={styles.headerIconBtn} onPress={onLock}>
+                <Ionicons name="lock-closed-outline" size={20} color={theme.headerText} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </SafeAreaView>
+      </LinearGradient>
 
       {/* Body + Composer: iOS uses native KeyboardAvoidingView, Android uses calibrated IME padding */}
       <KeyboardAvoidingView
@@ -941,7 +1021,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           {initialLoading && messages.length === 0 ? (
             <View style={styles.chatLoaderContainer}>
               <View style={styles.chatLoaderCard}>
-                <ActivityIndicator size="small" color={whatsappTheme.accentGreen} />
+                <ActivityIndicator size="small" color={theme.accentGreen} />
                 <Text style={styles.chatLoaderText}>Decrypting messages...</Text>
               </View>
             </View>
@@ -961,7 +1041,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     disabled={loadingOlder}
                   >
                     {loadingOlder ? (
-                      <ActivityIndicator size="small" color={whatsappTheme.accentGreen} />
+                      <ActivityIndicator size="small" color={theme.accentGreen} />
                     ) : (
                       <Text style={styles.loadEarlierText}>Load earlier messages</Text>
                     )}
@@ -1007,7 +1087,11 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                       </View>
                     ) : null}
 
-                    <SwipeableMessageBubble message={item} onSwipeReply={handleReplyMessage}>
+                    <SwipeableMessageBubble
+                      message={item}
+                      onSwipeReply={handleReplyMessage}
+                      hintStyle={styles.swipeReplyHint}
+                    >
                       <View
                         style={[
                           styles.bubbleContainer,
@@ -1029,8 +1113,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                           style={[
                             styles.bubble,
                             isOutgoing ? styles.outgoingBubble : styles.incomingBubble,
-                            isOutgoing && !isFirstInGroup && { borderTopRightRadius: 14 },
-                            !isOutgoing && !isFirstInGroup && { borderTopLeftRadius: 14 },
+                            isOutgoing && isLastInGroup && { borderBottomRightRadius: 4 },
+                            !isOutgoing && isLastInGroup && { borderBottomLeftRadius: 4 },
                           ]}
                         >
                           {parsed.replyTo ? (
@@ -1038,9 +1122,12 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                               style={[
                                 styles.replyQuoteBox,
                                 {
+                                  backgroundColor: isOutgoing
+                                    ? theme.quoteOutgoingBg
+                                    : theme.quoteIncomingBg,
                                   borderLeftColor: isOutgoing
-                                    ? whatsappTheme.tickBlue
-                                    : whatsappTheme.accentGreen,
+                                    ? theme.quoteOutgoingBorder
+                                    : theme.quoteIncomingBorder,
                                 },
                               ]}
                             >
@@ -1049,14 +1136,24 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                                   styles.replyQuoteAuthor,
                                   {
                                     color: isOutgoing
-                                      ? whatsappTheme.tickBlue
-                                      : whatsappTheme.accentGreen,
+                                      ? theme.quoteOutgoingAuthor
+                                      : theme.quoteIncomingAuthor,
                                   },
                                 ]}
                               >
                                 Quoted message
                               </Text>
-                              <Text style={styles.replyQuoteText} numberOfLines={2}>
+                              <Text
+                                style={[
+                                  styles.replyQuoteText,
+                                  {
+                                    color: isOutgoing
+                                      ? theme.bubbleOutgoingMeta
+                                      : theme.textSecondary,
+                                  },
+                                ]}
+                                numberOfLines={2}
+                              >
                                 {parsed.replyTo.preview}
                               </Text>
                             </View>
@@ -1086,29 +1183,75 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                           ) : null}
 
                           {parsed.text ? (
-                            <Text style={styles.messageText}>{parsed.text}</Text>
+                            <Text
+                              style={[
+                                styles.messageText,
+                                isOutgoing ? styles.outgoingMessageText : styles.incomingMessageText,
+                              ]}
+                            >
+                              {parsed.text}
+                            </Text>
                           ) : null}
 
                           <View style={styles.metaRow}>
                             {item.isBurning && item.remainingSeconds !== undefined ? (
-                              <View style={styles.burnBadge}>
-                                <Ionicons name="flame" size={12} color="#FFA500" />
-                                <Text style={styles.burnBadgeText}>
-                                  {item.remainingSeconds}s
+                              <View
+                                style={[
+                                  styles.burnBadge,
+                                  {
+                                    backgroundColor: isOutgoing
+                                      ? theme.burnBadgeOutgoingBg
+                                      : theme.burnBadgeIncomingBg,
+                                  },
+                                ]}
+                              >
+                                <Ionicons
+                                  name="flame"
+                                  size={12}
+                                  color={
+                                    isOutgoing
+                                      ? theme.burnBadgeOutgoingText
+                                      : theme.burnBadgeIncomingText
+                                  }
+                                />
+                                <Text
+                                  style={[
+                                    styles.burnBadgeText,
+                                    {
+                                      color: isOutgoing
+                                        ? theme.burnBadgeOutgoingText
+                                        : theme.burnBadgeIncomingText,
+                                    },
+                                  ]}
+                                >
+                                  {item.remainingSeconds < 60
+                                    ? `${item.remainingSeconds}s`
+                                    : item.remainingSeconds < 3600
+                                    ? `${Math.ceil(item.remainingSeconds / 60)}m`
+                                    : item.remainingSeconds < 86400
+                                    ? `${Math.ceil(item.remainingSeconds / 3600)}h`
+                                    : `${Math.ceil(item.remainingSeconds / 86400)}d`}
                                 </Text>
                               </View>
                             ) : thread.burn_on_read ? (
                               <Text style={styles.burnHint}>🔥</Text>
                             ) : null}
 
-                            <Text style={styles.timeMeta}>{timeStr}</Text>
+                            <Text
+                              style={[
+                                styles.timeMeta,
+                                isOutgoing && { color: theme.bubbleOutgoingMeta },
+                              ]}
+                            >
+                              {timeStr}
+                            </Text>
 
                             {isOutgoing ? (
                               <Ionicons
                                 name={item.isOptimistic ? 'time-outline' : 'checkmark-done'}
                                 size={15}
-                                color={item.read_at ? whatsappTheme.tickBlue : whatsappTheme.tickGray}
-                                style={{ marginLeft: 3 }}
+                                color={item.read_at ? theme.tickReadOnBubble : theme.tickGrayOnBubble}
+                                style={{ marginLeft: 4 }}
                               />
                             ) : null}
                           </View>
@@ -1121,7 +1264,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               ListEmptyComponent={
                 <View style={styles.emptyMessagesContainer}>
                   <View style={styles.securityBanner}>
-                    <Ionicons name="lock-closed" size={14} color="#F5A623" />
+                    <Ionicons name="lock-closed-outline" size={16} color={theme.accentGreen} />
                     <Text style={styles.securityBannerText}>
                       Messages are end-to-end ciphered with your device secret and burn automatically from Supabase. Zero messages are saved to disk.
                     </Text>
@@ -1141,7 +1284,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               flatListRef.current?.scrollToEnd({ animated: true });
             }}
           >
-            <Ionicons name="arrow-down" size={20} color={whatsappTheme.textPrimary} />
+            <Ionicons name="arrow-down" size={20} color={theme.accentGreen} />
           </TouchableOpacity>
         ) : null}
         </View>
@@ -1157,7 +1300,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
               </Text>
             </View>
             <TouchableOpacity onPress={() => setReplyTo(null)} style={{ padding: 4 }}>
-              <Ionicons name="close" size={18} color={whatsappTheme.textSecondary} />
+              <Ionicons name="close" size={18} color={theme.textSecondary} />
             </TouchableOpacity>
           </View>
         ) : null}
@@ -1179,49 +1322,69 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           </View>
         ) : null}
 
-        <View style={styles.composerContainer}>
-          <View style={styles.pillInput}>
+        {/* Composer Bar (Adapts cleanly between Ice & WhatsApp layouts) */}
+        <SafeAreaView edges={['bottom']} style={styles.composerSafe}>
+          <View style={styles.composerContainer}>
+            <View style={styles.pillInput}>
+              {theme.preset === 'ice' ? (
+                <TouchableOpacity onPress={handlePickImage} style={styles.attachCircleBtn}>
+                  <Ionicons name="add" size={20} color={theme.textOnAccent} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  onPress={() => setEmojiVisible((prev) => !prev)}
+                  style={{ marginRight: 8 }}
+                >
+                  <Ionicons
+                    name={emojiVisible ? 'keypad-outline' : 'happy-outline'}
+                    size={22}
+                    color={emojiVisible ? theme.accentGreen : theme.textSecondary}
+                  />
+                </TouchableOpacity>
+              )}
+
+              <TextInput
+                style={styles.textInput}
+                placeholder="Message"
+                placeholderTextColor={theme.textSecondary}
+                value={inputText}
+                onChangeText={handleInputChange}
+                multiline
+              />
+
+              {theme.preset === 'ice' ? (
+                <TouchableOpacity
+                  onPress={() => setEmojiVisible((prev) => !prev)}
+                  style={{ marginLeft: 8 }}
+                >
+                  <Ionicons
+                    name={emojiVisible ? 'keypad-outline' : 'happy-outline'}
+                    size={22}
+                    color={emojiVisible ? theme.accentGreen : theme.textSecondary}
+                  />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity onPress={handlePickImage} style={{ marginLeft: 8 }}>
+                  <Ionicons name="attach-outline" size={22} color={theme.textSecondary} />
+                </TouchableOpacity>
+              )}
+            </View>
+
             <TouchableOpacity
-              onPress={() => setEmojiVisible((prev) => !prev)}
-              style={{ marginRight: 8 }}
+              style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
+              activeOpacity={0.8}
+              onPress={handleSendMessage}
+              disabled={!inputText.trim() || sending}
             >
               <Ionicons
-                name={emojiVisible ? 'keypad-outline' : 'happy-outline'}
-                size={22}
-                color={emojiVisible ? whatsappTheme.accentGreen : whatsappTheme.textSecondary}
-              />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Message"
-              placeholderTextColor={whatsappTheme.textSecondary}
-              value={inputText}
-              onChangeText={handleInputChange}
-              multiline
-            />
-            <TouchableOpacity onPress={handlePickImage} style={{ marginLeft: 8 }}>
-              <Ionicons
-                name="attach-outline"
-                size={22}
-                color={whatsappTheme.textSecondary}
+                name="send"
+                size={18}
+                color={theme.textOnAccent}
+                style={{ marginLeft: 2 }}
               />
             </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            style={[styles.sendButton, !inputText.trim() && styles.sendButtonDisabled]}
-            activeOpacity={0.8}
-            onPress={handleSendMessage}
-            disabled={!inputText.trim() || sending}
-          >
-            <Ionicons
-              name="send"
-              size={18}
-              color="#0B141A"
-              style={{ marginLeft: 2 }}
-            />
-          </TouchableOpacity>
-        </View>
+        </SafeAreaView>
       </KeyboardAvoidingView>
 
       {/* Long-Press Message Action Menu */}
@@ -1243,7 +1406,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                   style={styles.actionRow}
                   onPress={() => handleReplyMessage(selectedMsg)}
                 >
-                  <Ionicons name="arrow-undo-outline" size={20} color={whatsappTheme.textPrimary} />
+                  <Ionicons name="arrow-undo-outline" size={20} color={theme.textPrimary} />
                   <Text style={styles.actionText}>Reply</Text>
                 </TouchableOpacity>
 
@@ -1252,7 +1415,7 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                     style={styles.actionRow}
                     onPress={() => handleCopyMessage(selectedMsg)}
                   >
-                    <Ionicons name="copy-outline" size={20} color={whatsappTheme.textPrimary} />
+                    <Ionicons name="copy-outline" size={20} color={theme.textPrimary} />
                     <Text style={styles.actionText}>Copy</Text>
                   </TouchableOpacity>
                 ) : null}
@@ -1261,8 +1424,8 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
                   style={styles.actionRow}
                   onPress={() => handleUnsendMessage(selectedMsg)}
                 >
-                  <Ionicons name="trash-outline" size={20} color={whatsappTheme.danger} />
-                  <Text style={[styles.actionText, { color: whatsappTheme.danger }]}>
+                  <Ionicons name="trash-outline" size={20} color={theme.danger} />
+                  <Text style={[styles.actionText, { color: theme.danger }]}>
                     Unsend (Delete for Both)
                   </Text>
                 </TouchableOpacity>
@@ -1308,14 +1471,14 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
             <View style={styles.burnToggleRow}>
               <View style={{ flex: 1, paddingRight: 10 }}>
                 <Text style={styles.actionText}>Burn on Read (8s)</Text>
-                <Text style={{ color: whatsappTheme.textSecondary, fontSize: 12, marginTop: 2 }}>
-                  Message waits safely while offline, then burns 8s after recipient reads it.
+                <Text style={{ color: theme.textSecondary, fontSize: 12, marginTop: 2 }}>
+                  All timers wait safely while unread (up to 7 days), then burn 8s (or your selected timer) after recipient reads the message.
                 </Text>
               </View>
               <Switch
                 value={thread.burn_on_read}
                 onValueChange={(val) => handleUpdateTimer({ burn_on_read: val })}
-                trackColor={{ false: '#2A3942', true: whatsappTheme.accentGreen }}
+                trackColor={{ false: theme.divider, true: theme.accentGreen }}
               />
             </View>
           </View>
@@ -1345,450 +1508,495 @@ export const ChatScreen: React.FC<ChatScreenProps> = ({
           ) : null}
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: whatsappTheme.bgHeader,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: whatsappTheme.bgHeader,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: whatsappTheme.divider,
-  },
-  backBtn: {
-    padding: 6,
-    marginRight: 4,
-  },
-  headerAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: whatsappTheme.bgSearchFocus,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 10,
-  },
-  headerAvatarText: {
-    color: whatsappTheme.accentGreen,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  headerInfo: {
-    flex: 1,
-  },
-  headerTitle: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  headerSubRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  headerSubtitle: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 12,
-  },
-  headerRight: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  headerIconBtn: {
-    padding: 6,
-  },
-  canvas: {
-    flex: 1,
-    backgroundColor: whatsappTheme.bgPrimary,
-  },
-  messagesList: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  bubbleContainer: {
-    flexDirection: 'row',
-  },
-  outgoingContainer: {
-    justifyContent: 'flex-end',
-  },
-  incomingContainer: {
-    justifyContent: 'flex-start',
-  },
-  bubble: {
-    maxWidth: '82%',
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingTop: 8,
-    paddingBottom: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.16,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  outgoingBubble: {
-    backgroundColor: whatsappTheme.bubbleOutgoing,
-    borderTopRightRadius: 3,
-  },
-  incomingBubble: {
-    backgroundColor: whatsappTheme.bubbleIncoming,
-    borderTopLeftRadius: 3,
-  },
-  onlineDot: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: whatsappTheme.accentGreen,
-    borderWidth: 2,
-    borderColor: whatsappTheme.bgHeader,
-  },
-  chatLoaderContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  chatLoaderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: whatsappTheme.bgHeader,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderRadius: 24,
-    gap: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: whatsappTheme.divider,
-  },
-  chatLoaderText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  loadEarlierBtn: {
-    alignSelf: 'center',
-    backgroundColor: whatsappTheme.bgHeader,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 16,
-    marginBottom: 10,
-  },
-  loadEarlierText: {
-    color: whatsappTheme.accentGreen,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  datePillWrapper: {
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-  datePill: {
-    backgroundColor: 'rgba(31, 44, 52, 0.92)',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 12,
-  },
-  datePillText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  messageText: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 15,
-    lineHeight: 20,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginTop: 4,
-  },
-  burnBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255, 165, 0, 0.2)',
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: 6,
-    marginRight: 6,
-    gap: 3,
-  },
-  burnBadgeText: {
-    color: '#FFA500',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  burnHint: {
-    fontSize: 10,
-    marginRight: 4,
-  },
-  timeMeta: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 11,
-  },
-  emptyMessagesContainer: {
-    paddingVertical: 24,
-    alignItems: 'center',
-  },
-  securityBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(31, 44, 52, 0.85)',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    maxWidth: '90%',
-    gap: 8,
-  },
-  securityBannerText: {
-    color: '#D1D7DB',
-    fontSize: 12,
-    lineHeight: 16,
-    flex: 1,
-    textAlign: 'center',
-  },
-  composerContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    backgroundColor: whatsappTheme.bgPrimary,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: whatsappTheme.divider,
-    gap: 8,
-  },
-  pillInput: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: whatsappTheme.bgInputPill,
-    borderRadius: 24,
-    paddingHorizontal: 14,
-    minHeight: 46,
-    maxHeight: 120,
-  },
-  textInput: {
-    flex: 1,
-    color: whatsappTheme.textPrimary,
-    fontSize: 15,
-    paddingVertical: 8,
-  },
-  sendButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: whatsappTheme.accentGreen,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
-  replyQuoteBox: {
-    backgroundColor: 'rgba(0,0,0,0.24)',
-    borderLeftWidth: 3,
-    borderLeftColor: whatsappTheme.accentGreen,
-    borderRadius: 7,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    marginBottom: 6,
-  },
-  replyQuoteAuthor: {
-    fontSize: 11,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  replyQuoteText: {
-    color: '#D1D7DB',
-    fontSize: 12,
-  },
-  imageWrapper: {
-    borderRadius: 10,
-    overflow: 'hidden',
-    marginBottom: 5,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-  bubbleImage: {
-    width: 224,
-    height: 224,
-  },
-  imageUploadOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.52)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 6,
-  },
-  imageUploadText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  scrollBottomBtn: {
-    position: 'absolute',
-    right: 14,
-    bottom: 14,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: whatsappTheme.bgHeader,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  replyBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: whatsappTheme.bgHeader,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: whatsappTheme.divider,
-    gap: 10,
-  },
-  replyBannerBar: {
-    width: 3,
-    height: 30,
-    backgroundColor: whatsappTheme.accentGreen,
-    borderRadius: 2,
-  },
-  replyBannerLabel: {
-    color: whatsappTheme.accentGreen,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  replyBannerText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 13,
-  },
-  emojiBar: {
-    backgroundColor: whatsappTheme.bgHeader,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: whatsappTheme.divider,
-  },
-  emojiBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  emojiChar: {
-    fontSize: 24,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.65)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  actionCard: {
-    width: '80%',
-    backgroundColor: whatsappTheme.bgHeader,
-    borderRadius: 14,
-    paddingVertical: 8,
-  },
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    gap: 14,
-  },
-  actionText: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  imagePreviewOverlay: {
-    flex: 1,
-    backgroundColor: '#000000',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imagePreviewClose: {
-    position: 'absolute',
-    top: 48,
-    right: 20,
-    zIndex: 10,
-    padding: 8,
-  },
-  imagePreviewFull: {
-    width: '100%',
-    height: '80%',
-  },
-  swipeReplyHint: {
-    position: 'absolute',
-    left: 10,
-    top: '50%',
-    marginTop: -12,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: 'rgba(31, 44, 52, 0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  timerCard: {
-    width: '88%',
-    backgroundColor: whatsappTheme.bgHeader,
-    borderRadius: 16,
-    padding: 20,
-  },
-  timerTitle: {
-    color: whatsappTheme.textPrimary,
-    fontSize: 17,
-    fontWeight: '700',
-    marginBottom: 14,
-  },
-  timerPillsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 18,
-  },
-  timerPill: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: whatsappTheme.bgPrimary,
-    alignItems: 'center',
-  },
-  timerPillActive: {
-    backgroundColor: whatsappTheme.accentGreen,
-  },
-  timerPillText: {
-    color: whatsappTheme.textSecondary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  timerPillTextActive: {
-    color: '#0B141A',
-  },
-  burnToggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: whatsappTheme.divider,
-  },
-});
+const createStyles = (theme: AppTheme) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: theme.bgCard,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 11,
+    },
+    backBtn: {
+      padding: 4,
+      marginRight: 6,
+    },
+    headerAvatar: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: theme.headerAvatarBg,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 1.5,
+      borderColor: theme.headerAvatarBorder,
+    },
+    headerAvatarText: {
+      color: theme.headerAvatarText,
+      fontSize: 14,
+      fontWeight: '700',
+    },
+    headerInfo: {
+      flex: 1,
+      paddingRight: 8,
+    },
+    headerTitle: {
+      color: theme.headerText,
+      fontSize: 17,
+      fontWeight: '700',
+    },
+    headerSubRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 2,
+    },
+    headerSubtitle: {
+      color: theme.headerSubtext,
+      fontSize: 12,
+    },
+    headerRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    headerIconBtn: {
+      padding: 6,
+    },
+    canvas: {
+      flex: 1,
+      backgroundColor: theme.bgPrimary,
+    },
+    messagesList: {
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    bubbleContainer: {
+      flexDirection: 'row',
+    },
+    outgoingContainer: {
+      justifyContent: 'flex-end',
+    },
+    incomingContainer: {
+      justifyContent: 'flex-start',
+    },
+    bubble: {
+      maxWidth: '80%',
+      borderRadius: 18,
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: 7,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: theme.isDark ? 0.22 : 0.06,
+      shadowRadius: 6,
+      elevation: 1,
+    },
+    outgoingBubble: {
+      backgroundColor: theme.bubbleOutgoing,
+    },
+    incomingBubble: {
+      backgroundColor: theme.bubbleIncoming,
+    },
+    onlineDot: {
+      position: 'absolute',
+      bottom: -1,
+      right: -1,
+      width: 11,
+      height: 11,
+      borderRadius: 6,
+      backgroundColor: theme.onlineGreen,
+      borderWidth: 2,
+      borderColor: theme.gradientEnd,
+    },
+    chatLoaderContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    chatLoaderCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.bgCard,
+      paddingHorizontal: 18,
+      paddingVertical: 12,
+      borderRadius: 24,
+      gap: 10,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: theme.isDark ? 0.3 : 0.08,
+      shadowRadius: 10,
+      elevation: 3,
+    },
+    chatLoaderText: {
+      color: theme.textSecondary,
+      fontSize: 13,
+      fontWeight: '600',
+    },
+    loadEarlierBtn: {
+      alignSelf: 'center',
+      backgroundColor: theme.surfaceHighlight,
+      paddingHorizontal: 14,
+      paddingVertical: 7,
+      borderRadius: 16,
+      marginBottom: 10,
+    },
+    loadEarlierText: {
+      color: theme.accentGreen,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    datePillWrapper: {
+      alignItems: 'center',
+      marginVertical: 10,
+    },
+    datePill: {
+      backgroundColor: theme.datePillBg,
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: 12,
+    },
+    datePillText: {
+      color: theme.datePillText,
+      fontSize: 11,
+      fontWeight: '600',
+    },
+    messageText: {
+      fontSize: 15,
+      lineHeight: 21,
+    },
+    outgoingMessageText: {
+      color: theme.bubbleOutgoingText,
+    },
+    incomingMessageText: {
+      color: theme.bubbleIncomingText,
+    },
+    metaRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      marginTop: 4,
+    },
+    burnBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 6,
+      paddingVertical: 1,
+      borderRadius: 8,
+      marginRight: 6,
+      gap: 3,
+    },
+    burnBadgeText: {
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    burnHint: {
+      fontSize: 10,
+      marginRight: 4,
+    },
+    timeMeta: {
+      color: theme.textSecondary,
+      fontSize: 11,
+    },
+    emptyMessagesContainer: {
+      paddingVertical: 24,
+      alignItems: 'center',
+    },
+    securityBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.bgCard,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      borderRadius: 14,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      maxWidth: '92%',
+      gap: 8,
+    },
+    securityBannerText: {
+      color: theme.textSecondary,
+      fontSize: 12,
+      lineHeight: 17,
+      flex: 1,
+      textAlign: 'center',
+    },
+    composerSafe: {
+      backgroundColor: theme.bgCard,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.divider,
+    },
+    composerContainer: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      backgroundColor: theme.bgCard,
+      gap: 8,
+    },
+    pillInput: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.bgInputPill,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      borderRadius: 26,
+      paddingHorizontal: theme.preset === 'ice' ? 8 : 14,
+      paddingRight: 14,
+      minHeight: 46,
+      maxHeight: 120,
+    },
+    attachCircleBtn: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: theme.accentGreen,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 8,
+    },
+    textInput: {
+      flex: 1,
+      color: theme.textPrimary,
+      fontSize: 15,
+      paddingVertical: 8,
+    },
+    sendButton: {
+      width: 46,
+      height: 46,
+      borderRadius: 23,
+      backgroundColor: theme.accentGreen,
+      justifyContent: 'center',
+      alignItems: 'center',
+      shadowColor: theme.accentGreen,
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      elevation: 3,
+    },
+    sendButtonDisabled: {
+      opacity: 0.45,
+    },
+    replyQuoteBox: {
+      borderLeftWidth: 3,
+      borderRadius: 8,
+      paddingHorizontal: 9,
+      paddingVertical: 5,
+      marginBottom: 6,
+    },
+    replyQuoteAuthor: {
+      fontSize: 11,
+      fontWeight: '700',
+      marginBottom: 2,
+    },
+    replyQuoteText: {
+      fontSize: 12,
+    },
+    imageWrapper: {
+      borderRadius: 14,
+      overflow: 'hidden',
+      marginBottom: 5,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.divider,
+    },
+    bubbleImage: {
+      width: 224,
+      height: 224,
+    },
+    imageUploadOverlay: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(15, 23, 42, 0.52)',
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 6,
+    },
+    imageUploadText: {
+      color: '#FFFFFF',
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    scrollBottomBtn: {
+      position: 'absolute',
+      right: 14,
+      bottom: 14,
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: theme.bgCard,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      justifyContent: 'center',
+      alignItems: 'center',
+      elevation: 4,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.14,
+      shadowRadius: 6,
+    },
+    replyBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: theme.bgCard,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.divider,
+      gap: 10,
+    },
+    replyBannerBar: {
+      width: 3,
+      height: 30,
+      backgroundColor: theme.accentGreen,
+      borderRadius: 2,
+    },
+    replyBannerLabel: {
+      color: theme.accentGreen,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    replyBannerText: {
+      color: theme.textSecondary,
+      fontSize: 13,
+    },
+    emojiBar: {
+      backgroundColor: theme.bgCard,
+      paddingVertical: 8,
+      paddingHorizontal: 6,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.divider,
+    },
+    emojiBtn: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+    },
+    emojiChar: {
+      fontSize: 24,
+    },
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: theme.modalOverlay,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    actionCard: {
+      width: '80%',
+      backgroundColor: theme.bgCard,
+      borderRadius: 18,
+      paddingVertical: 8,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: theme.isDark ? 0.35 : 0.16,
+      shadowRadius: 20,
+      elevation: 10,
+    },
+    actionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingVertical: 14,
+      gap: 14,
+    },
+    actionText: {
+      color: theme.textPrimary,
+      fontSize: 16,
+      fontWeight: '500',
+    },
+    imagePreviewOverlay: {
+      flex: 1,
+      backgroundColor: '#000000',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    imagePreviewClose: {
+      position: 'absolute',
+      top: 48,
+      right: 20,
+      zIndex: 10,
+      padding: 8,
+    },
+    imagePreviewFull: {
+      width: '100%',
+      height: '80%',
+    },
+    swipeReplyHint: {
+      position: 'absolute',
+      left: 10,
+      top: '50%',
+      marginTop: -12,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: theme.bgCard,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    timerCard: {
+      width: '88%',
+      backgroundColor: theme.bgCard,
+      borderRadius: 20,
+      padding: 20,
+      borderWidth: 1,
+      borderColor: theme.divider,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: theme.isDark ? 0.35 : 0.16,
+      shadowRadius: 20,
+      elevation: 10,
+    },
+    timerTitle: {
+      color: theme.textPrimary,
+      fontSize: 17,
+      fontWeight: '700',
+      marginBottom: 14,
+    },
+    timerPillsRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 18,
+    },
+    timerPill: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 12,
+      backgroundColor: theme.bgInputPill,
+      alignItems: 'center',
+    },
+    timerPillActive: {
+      backgroundColor: theme.accentGreen,
+    },
+    timerPillText: {
+      color: theme.textSecondary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    timerPillTextActive: {
+      color: theme.textOnAccent,
+    },
+    burnToggleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingTop: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: theme.divider,
+    },
+  });
 
